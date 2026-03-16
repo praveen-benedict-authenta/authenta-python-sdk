@@ -10,7 +10,7 @@ client = AuthentaClient(
 import os
 import time
 import mimetypes
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import requests
 from .authenta_exceptions import (
@@ -135,6 +135,7 @@ class AuthentaClient:
         content_type: str,
         size: int,
         model_type: str,
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         POST /api/media: create a media record and get an upload URL.
@@ -150,13 +151,28 @@ class AuthentaClient:
             Parsed JSON response containing at least 'mid' and 'uploadUrl'.
         """
         url = f"{self.base_url}/api/media"
+        
         payload = {
             "name": name,
             "contentType": content_type,
             "size": size,
             "modelType": model_type,
         }
+
+        if model_type.upper() == "FI-1":
+            fi_params = {
+                "isSingleFace": kwargs.get("isSingleFace", True),
+                "faceswapCheck": kwargs.get("faceswapCheck"),
+                "livenessCheck": kwargs.get("livenessCheck"),
+                "faceSimilarityCheck": kwargs.get("faceSimilarityCheck"),
+            }
+            payload.update({
+                "metadata": {
+                    i: j for i, j in fi_params.items()
+                }
+            })
         resp = requests.post(url, json=payload, headers=self._headers(), timeout=30)
+        print(f"create_media payload: {payload}")
         print("create_media raw:", resp.status_code, repr(resp.text[:200]))
         if not resp.ok:
             _raise_for_authenta_error(resp)
@@ -179,7 +195,7 @@ class AuthentaClient:
             _raise_for_authenta_error(resp)
         return _safe_json(resp)
 
-    def upload_file(self, path: str, model_type: str) -> Dict[str, Any]:
+    def upload_file(self, path: str, model_type: str, **kwargs) -> Dict[str, Any]:
         """
         Upload a file via the two-step Authenta media flow.
 
@@ -190,6 +206,7 @@ class AuthentaClient:
         Args:
             path: Local path to the media file.
             model_type: Detection model type to use, e.g. "AC-1" or "DF-1".
+            **kwargs: Additional parameters for the media creation request.
 
         Returns:
             The JSON response from POST /api/media (includes 'mid', 'status', etc.).
@@ -204,6 +221,7 @@ class AuthentaClient:
             content_type=content_type,
             size=size,
             model_type=model_type,
+            **kwargs,
         )
         upload_url = meta.get("uploadUrl")
         if not upload_url:
@@ -217,6 +235,17 @@ class AuthentaClient:
                 headers={"Content-Type": content_type},
                 timeout=300,
             )
+        if model_type.upper() == "FI-1":
+            reference_img_url = meta.get("referenceUploadUrl")
+            if reference_img_url:
+                with open(kwargs.get("reference_img_path"), "rb") as f:
+                    ref_res = requests.put(
+                        reference_img_url,
+                        data=f,
+                        headers={"Content-Type": self._content_type(kwargs.get("reference_img_path"))},
+                        timeout=300,
+                    )
+                    ref_res.raise_for_status()
         put_resp.raise_for_status()
         return meta
 
@@ -269,6 +298,55 @@ class AuthentaClient:
           2) wait_for_media(mid)
         """
         meta = self.upload_file(path, model_type=model_type)
+        mid = meta.get("mid")
+        if not mid:
+            raise RuntimeError("No 'mid' in upload response")
+        return self.wait_for_media(mid, interval=interval, timeout=timeout)
+    
+    def face_intelligence(
+            self,
+            path: str,
+            model_type: str,
+            reference_img_path: Optional[str] = None,
+            isSingleFace: Optional[bool] = True,
+            faceswapCheck: Optional[bool] = False,
+            livenessCheck: Optional[bool] = False,
+            faceSimilarityCheck: Optional[bool] = False,
+            interval: float = 5.0,
+            timeout: float = 600.0,
+    ) -> Dict[str, Any]:
+        """
+        High-level helper for Face Integrity (FI) model:
+          1) upload_file(path, model_type) -> get mid
+          2) wait_for_media(mid)
+        Args:
+            path: Local path to the media file.
+            model_type: Detection model type to use, e.g. "AC-1" or "DF-1".
+            isSingleFace: Whether to check for a single face.
+            faceswapCheck: Whether to check for face swapping.
+            livenessCheck: Whether to check for liveness.
+            faceSimilarityCheck: Whether to check for face similarity.
+            interval: Polling interval in seconds.
+            timeout: Timeout in seconds.
+
+        Returns:
+            The JSON response from POST /api/media (includes 'mid', 'status', etc.).
+        """
+        fi_params = {
+            "reference_img_path": reference_img_path,
+            "isSingleFace": True,
+            "faceswapCheck": faceswapCheck,
+            "livenessCheck": livenessCheck,
+            "faceSimilarityCheck": faceSimilarityCheck,
+        }
+        if self._content_type(path).startswith("image/") and faceswapCheck == True:
+            raise ValueError("faceswapCheck cannot be True for image media")
+        if self._content_type(path).startswith("video/") and faceSimilarityCheck == True:
+            raise ValueError("faceSimilarityCheck cannot be True for video media")
+        if faceSimilarityCheck == True and (not reference_img_path or reference_img_path == None):
+            raise ValueError("reference_img_path must be provided if faceSimilarityCheck is True")
+
+        meta = self.upload_file(path, model_type=model_type, **fi_params)
         mid = meta.get("mid")
         if not mid:
             raise RuntimeError("No 'mid' in upload response")
