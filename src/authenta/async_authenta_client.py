@@ -153,6 +153,7 @@ class AsyncAuthentaClient:
         content_type: str,
         size: int,
         model_type: str,
+        **kwargs
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/api/media"
         payload = {
@@ -161,6 +162,22 @@ class AsyncAuthentaClient:
             "size": size,
             "modelType": model_type,
         }
+        
+        # Add model-specific parameters to payload
+        if model_type == "FI":
+            # Face Integrity specific parameters
+            fi_params = {
+                "isSingleFace": kwargs.get("isSingleFace"),
+                "faceSwapCheck": kwargs.get("faceSwapCheck"),
+                "livenessCheck": kwargs.get("livenessCheck"),
+                "faceSimilarityCheck": kwargs.get("faceSimilarityCheck"),
+            }
+            # Only add parameters that were explicitly provided (not None)
+            payload.update({k: v for k, v in fi_params.items() if v is not None})
+        else:
+            # For other model types, pass through remaining kwargs
+            payload.update({k: v for k, v in kwargs.items() if v is not None})
+        
         client = await self._get_client()
         resp = await client.post(url, json=payload, headers=self._headers())
         if not resp.is_success:
@@ -175,7 +192,7 @@ class AsyncAuthentaClient:
             _raise_for_authenta_error_async(resp)
         return _safe_json_async(resp)
 
-    async def upload_file(self, path: str, model_type: str) -> Dict[str, Any]:
+    async def upload_file(self, path: str, model_type: str, **kwargs) -> Dict[str, Any]:
         filename = os.path.basename(path)
         content_type = self._content_type(path)
         size = os.path.getsize(path)
@@ -185,6 +202,7 @@ class AsyncAuthentaClient:
             content_type=content_type,
             size=size,
             model_type=model_type,
+            **kwargs
         )
         upload_url = meta.get("uploadUrl")
         if not upload_url:
@@ -264,6 +282,58 @@ class AsyncAuthentaClient:
           2) await wait_for_media(mid)
         """
         meta = await self.upload_file(path, model_type=model_type)
+        mid = meta.get("mid")
+        if not mid:
+            raise RuntimeError("No 'mid' in upload response")
+        return await self.wait_for_media(mid, interval=interval, timeout=timeout)
+
+    async def process_FI(
+        self,
+        path: str,
+        model_type: str,
+        isSingleFace: Optional[bool] = None,
+        faceSwapCheck: Optional[bool] = None,
+        livenessCheck: Optional[bool] = None,
+        faceSimilarityCheck: Optional[bool] = None,
+        auto_polling: bool = True,
+        interval: float = 5.0,
+        timeout: float = 600.0,
+    ) -> Dict[str, Any]:
+        """
+        High-level async helper for Face Integrity (FI) model:
+          1) await upload_file(path, model_type, **fi_params) -> get mid
+          2) await wait_for_media(mid) (only if auto_polling=True)
+
+        Args:
+            path: Local path to the media file.
+            model_type: Detection model type to use (e.g., "FI-1").
+            isSingleFace: Whether to check for a single face.
+            faceSwapCheck: Whether to check for face swapping.
+            livenessCheck: Whether to check for liveness.
+            faceSimilarityCheck: Whether to check for face similarity.
+            auto_polling: If True (default), awaits until processing completes via
+                wait_for_media(). If False, returns immediately after upload with
+                the initial media metadata (including 'mid') so you can poll manually.
+            interval: Polling interval in seconds (used only when auto_polling=True).
+            timeout: Timeout in seconds (used only when auto_polling=True).
+
+        Returns:
+            If auto_polling=True: the final processed media JSON.
+            If auto_polling=False: the initial upload metadata dict (includes 'mid').
+        """
+        # Build FI-specific parameters
+        fi_params = {
+            "isSingleFace": isSingleFace,
+            "faceSwapCheck": faceSwapCheck,
+            "livenessCheck": livenessCheck,
+            "faceSimilarityCheck": faceSimilarityCheck,
+        }
+        # Remove None values to avoid sending unnecessary params
+        fi_params = {k: v for k, v in fi_params.items() if v is not None}
+
+        meta = await self.upload_file(path, model_type=model_type, **fi_params)
+        if not auto_polling:
+            return meta
         mid = meta.get("mid")
         if not mid:
             raise RuntimeError("No 'mid' in upload response")
