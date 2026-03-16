@@ -22,7 +22,7 @@ from .authenta_exceptions import (
     ValidationError,
     ServerError,
 )
-
+from curl_cffi import requests as cffi_requests
 
 def _raise_for_authenta_error(resp: requests.Response) -> None:
     """
@@ -171,7 +171,10 @@ class AuthentaClient:
                     i: j for i, j in fi_params.items()
                 }
             })
-        resp = requests.post(url, json=payload, headers=self._headers(), timeout=30)
+        if self.base_url=="https://platform.authenta.ai":
+            resp = cffi_requests.post(url, json=payload, headers=self._headers(), impersonate="chrome", timeout=30)
+        else:
+            resp = requests.post(url, json=payload, headers=self._headers(), timeout=30)
         print(f"create_media payload: {payload}")
         print("create_media raw:", resp.status_code, repr(resp.text[:200]))
         if not resp.ok:
@@ -190,7 +193,10 @@ class AuthentaClient:
             Parsed JSON media record.
         """
         url = f"{self.base_url}/api/media/{mid}"
-        resp = requests.get(url, headers=self._headers(), timeout=30)
+        if self.base_url=="https://platform.authenta.ai":
+            resp = cffi_requests.get(url, headers=self._headers(), impersonate="chrome", timeout=30)
+        else:
+            resp = requests.get(url, headers=self._headers(), timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
         return _safe_json(resp)
@@ -280,7 +286,10 @@ class AuthentaClient:
         Accepts optional query params (page, pageSize, filters) if the API supports them.
         """
         url = f"{self.base_url}/api/media"
-        resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
+        if self.base_url=="https://platform.authenta.ai":
+            resp = cffi_requests.get(url, headers=self._headers(), params=params, impersonate="chrome", timeout=30)
+        else:
+            resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
         return _safe_json(resp)
@@ -355,6 +364,9 @@ class AuthentaClient:
     def delete_media(self, mid: str) -> None:
         """DELETE /api/media/{mid}: delete a media record."""
         url = f"{self.base_url}/api/media/{mid}"
-        resp = requests.delete(url, headers=self._headers(), timeout=30)
+        if self.base_url=="https://platform.authenta.ai":
+            resp = cffi_requests.delete(url, headers=self._headers(), impersonate="chrome", timeout=30)
+        else:
+            resp = requests.delete(url, headers=self._headers(), timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
