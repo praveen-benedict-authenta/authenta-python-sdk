@@ -295,26 +295,31 @@ class AsyncAuthentaClient:
         faceSwapCheck: Optional[bool] = None,
         livenessCheck: Optional[bool] = None,
         faceSimilarityCheck: Optional[bool] = None,
+        auto_polling: bool = True,
         interval: float = 5.0,
         timeout: float = 600.0,
     ) -> Dict[str, Any]:
         """
         High-level async helper for Face Integrity (FI) model:
           1) await upload_file(path, model_type, **fi_params) -> get mid
-          2) await wait_for_media(mid)
+          2) await wait_for_media(mid) (only if auto_polling=True)
 
         Args:
             path: Local path to the media file.
-            model_type: Detection model type to use (e.g., "FI").
+            model_type: Detection model type to use (e.g., "FI-1").
             isSingleFace: Whether to check for a single face.
             faceSwapCheck: Whether to check for face swapping.
             livenessCheck: Whether to check for liveness.
             faceSimilarityCheck: Whether to check for face similarity.
-            interval: Polling interval in seconds.
-            timeout: Timeout in seconds.
+            auto_polling: If True (default), awaits until processing completes via
+                wait_for_media(). If False, returns immediately after upload with
+                the initial media metadata (including 'mid') so you can poll manually.
+            interval: Polling interval in seconds (used only when auto_polling=True).
+            timeout: Timeout in seconds (used only when auto_polling=True).
 
         Returns:
-            The JSON response after media processing is complete.
+            If auto_polling=True: the final processed media JSON.
+            If auto_polling=False: the initial upload metadata dict (includes 'mid').
         """
         # Build FI-specific parameters
         fi_params = {
@@ -325,8 +330,10 @@ class AsyncAuthentaClient:
         }
         # Remove None values to avoid sending unnecessary params
         fi_params = {k: v for k, v in fi_params.items() if v is not None}
-        
+
         meta = await self.upload_file(path, model_type=model_type, **fi_params)
+        if not auto_polling:
+            return meta
         mid = meta.get("mid")
         if not mid:
             raise RuntimeError("No 'mid' in upload response")

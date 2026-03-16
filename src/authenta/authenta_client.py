@@ -22,7 +22,6 @@ from .authenta_exceptions import (
     ValidationError,
     ServerError,
 )
-from curl_cffi import requests as cffi_requests
 
 def _raise_for_authenta_error(resp: requests.Response) -> None:
     """
@@ -35,7 +34,6 @@ def _raise_for_authenta_error(resp: requests.Response) -> None:
     try:
         data = resp.json()
     except ValueError:
-        # Non-JSON error body
         if 400 <= status < 500:
             raise ValidationError(
                 message=resp.text or "Client error",
@@ -145,13 +143,12 @@ class AuthentaClient:
             content_type: MIME type of the file (e.g. "image/png", "video/mp4").
             size: File size in bytes.
             model_type: Detection model type, e.g. "AC-1" or "DF-1".
-                       "AC-1" - Image, "DF-1" - Video.
 
         Returns:
             Parsed JSON response containing at least 'mid' and 'uploadUrl'.
         """
         url = f"{self.base_url}/api/media"
-        
+
         payload = {
             "name": name,
             "contentType": content_type,
@@ -167,20 +164,13 @@ class AuthentaClient:
                 "faceSimilarityCheck": kwargs.get("faceSimilarityCheck"),
             }
             payload.update({
-                "metadata": {
-                    i: j for i, j in fi_params.items()
-                }
+                "metadata": {i: j for i, j in fi_params.items()}
             })
-        if self.base_url=="https://platform.authenta.ai":
-            resp = cffi_requests.post(url, json=payload, headers=self._headers(), impersonate="chrome", timeout=30)
-        else:
-            resp = requests.post(url, json=payload, headers=self._headers(), timeout=30)
-        print(f"create_media payload: {payload}")
-        print("create_media raw:", resp.status_code, repr(resp.text[:200]))
+
+        resp = requests.post(url, json=payload, headers=self._headers(), timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
         return _safe_json(resp)
-
 
     def get_media(self, mid: str) -> Dict[str, Any]:
         """
@@ -193,10 +183,7 @@ class AuthentaClient:
             Parsed JSON media record.
         """
         url = f"{self.base_url}/api/media/{mid}"
-        if self.base_url=="https://platform.authenta.ai":
-            resp = cffi_requests.get(url, headers=self._headers(), impersonate="chrome", timeout=30)
-        else:
-            resp = requests.get(url, headers=self._headers(), timeout=30)
+        resp = requests.get(url, headers=self._headers(), timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
         return _safe_json(resp)
@@ -212,7 +199,6 @@ class AuthentaClient:
         Args:
             path: Local path to the media file.
             model_type: Detection model type to use, e.g. "AC-1" or "DF-1".
-            **kwargs: Additional parameters for the media creation request.
 
         Returns:
             The JSON response from POST /api/media (includes 'mid', 'status', etc.).
@@ -221,7 +207,6 @@ class AuthentaClient:
         content_type = self._content_type(path)
         size = os.path.getsize(path)
 
-        # Step 1: create media
         meta = self.create_media(
             name=filename,
             content_type=content_type,
@@ -233,7 +218,6 @@ class AuthentaClient:
         if not upload_url:
             raise RuntimeError("No uploadUrl in create_media response")
 
-        # Step 2: upload to S3
         with open(path, "rb") as f:
             put_resp = requests.put(
                 upload_url,
@@ -241,6 +225,7 @@ class AuthentaClient:
                 headers={"Content-Type": content_type},
                 timeout=300,
             )
+
         if model_type.upper() == "FI-1":
             reference_img_url = meta.get("referenceUploadUrl")
             if reference_img_url:
@@ -252,6 +237,7 @@ class AuthentaClient:
                         timeout=300,
                     )
                     ref_res.raise_for_status()
+
         put_resp.raise_for_status()
         return meta
 
@@ -286,10 +272,7 @@ class AuthentaClient:
         Accepts optional query params (page, pageSize, filters) if the API supports them.
         """
         url = f"{self.base_url}/api/media"
-        if self.base_url=="https://platform.authenta.ai":
-            resp = cffi_requests.get(url, headers=self._headers(), params=params, impersonate="chrome", timeout=30)
-        else:
-            resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
+        resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
         return _safe_json(resp)
@@ -311,7 +294,34 @@ class AuthentaClient:
         if not mid:
             raise RuntimeError("No 'mid' in upload response")
         return self.wait_for_media(mid, interval=interval, timeout=timeout)
-    
+
+    def get_result(self, media: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Fetch the detection result JSON from the media's resultURL.
+
+        The resultURL is a presigned S3 URL returned after processing.
+        It contains the actual detection output (e.g. isLiveness, isDeepFake,
+        isSimilar, similarityScore, etc.).
+
+        Args:
+            media: A media dict returned by face_intelligence(), process(), or
+                   wait_for_media() — must contain a 'resultURL' key.
+
+        Returns:
+            Parsed detection result dict from resultURL.
+
+        Raises:
+            ValueError: If the media dict has no resultURL.
+            RuntimeError: If the resultURL fetch fails.
+        """
+        result_url = media.get("resultURL")
+        if not result_url:
+            raise ValueError("media dict has no 'resultURL'. Ensure processing is complete (status=PROCESSED).")
+        resp = requests.get(result_url, timeout=30)
+        if not resp.ok:
+            raise RuntimeError(f"Failed to fetch resultURL: HTTP {resp.status_code}")
+        return resp.json()
+
     def face_intelligence(
             self,
             path: str,
@@ -321,52 +331,64 @@ class AuthentaClient:
             faceswapCheck: Optional[bool] = False,
             livenessCheck: Optional[bool] = False,
             faceSimilarityCheck: Optional[bool] = False,
+            auto_polling: bool = True,
             interval: float = 5.0,
             timeout: float = 600.0,
     ) -> Dict[str, Any]:
         """
         High-level helper for Face Integrity (FI) model:
           1) upload_file(path, model_type) -> get mid
-          2) wait_for_media(mid)
+          2) wait_for_media(mid) (only if auto_polling=True)
+          3) get_result(media) to fetch detection output (only if auto_polling=True)
+
         Args:
             path: Local path to the media file.
-            model_type: Detection model type to use, e.g. "AC-1" or "DF-1".
+            model_type: Detection model type to use, e.g. "FI-1".
+            reference_img_path: Required when faceSimilarityCheck=True.
             isSingleFace: Whether to check for a single face.
-            faceswapCheck: Whether to check for face swapping.
+            faceswapCheck: Whether to check for face swapping (video only).
             livenessCheck: Whether to check for liveness.
-            faceSimilarityCheck: Whether to check for face similarity.
-            interval: Polling interval in seconds.
-            timeout: Timeout in seconds.
+            faceSimilarityCheck: Whether to check for face similarity (image only).
+            auto_polling: If True (default), blocks until processing completes and
+                automatically fetches the detection result from resultURL, merging
+                it into the returned dict under the key 'result'.
+                If False, returns immediately after upload with initial metadata.
+            interval: Polling interval in seconds (used only when auto_polling=True).
+            timeout: Timeout in seconds (used only when auto_polling=True).
 
         Returns:
-            The JSON response from POST /api/media (includes 'mid', 'status', etc.).
+            If auto_polling=True: media dict with an added 'result' key containing
+                the full detection output fetched from resultURL.
+            If auto_polling=False: the initial upload metadata dict (includes 'mid').
         """
+        if self._content_type(path).startswith("image/") and faceswapCheck:
+            raise ValueError("faceswapCheck cannot be True for image media")
+        if self._content_type(path).startswith("video/") and faceSimilarityCheck:
+            raise ValueError("faceSimilarityCheck cannot be True for video media")
+        if faceSimilarityCheck and not reference_img_path:
+            raise ValueError("reference_img_path must be provided if faceSimilarityCheck is True")
+
         fi_params = {
             "reference_img_path": reference_img_path,
-            "isSingleFace": True,
+            "isSingleFace": isSingleFace,
             "faceswapCheck": faceswapCheck,
             "livenessCheck": livenessCheck,
             "faceSimilarityCheck": faceSimilarityCheck,
         }
-        if self._content_type(path).startswith("image/") and faceswapCheck == True:
-            raise ValueError("faceswapCheck cannot be True for image media")
-        if self._content_type(path).startswith("video/") and faceSimilarityCheck == True:
-            raise ValueError("faceSimilarityCheck cannot be True for video media")
-        if faceSimilarityCheck == True and (not reference_img_path or reference_img_path == None):
-            raise ValueError("reference_img_path must be provided if faceSimilarityCheck is True")
 
         meta = self.upload_file(path, model_type=model_type, **fi_params)
+        if not auto_polling:
+            return meta
         mid = meta.get("mid")
         if not mid:
             raise RuntimeError("No 'mid' in upload response")
-        return self.wait_for_media(mid, interval=interval, timeout=timeout)
+        media = self.wait_for_media(mid, interval=interval, timeout=timeout)
+        media["result"] = self.get_result(media)
+        return media
 
     def delete_media(self, mid: str) -> None:
         """DELETE /api/media/{mid}: delete a media record."""
         url = f"{self.base_url}/api/media/{mid}"
-        if self.base_url=="https://platform.authenta.ai":
-            resp = cffi_requests.delete(url, headers=self._headers(), impersonate="chrome", timeout=30)
-        else:
-            resp = requests.delete(url, headers=self._headers(), timeout=30)
+        resp = requests.delete(url, headers=self._headers(), timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
