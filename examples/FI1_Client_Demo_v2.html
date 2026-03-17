@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Authenta — Face Intelligence API v2</title>
+
+<!-- Reveal.js -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css" />
+
+<!-- Highlight.js -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-light.min.css" />
+
+<style>
+  :root {
+    --green:  #27ae60;
+    --detect: #2c3e50;
+    --blue:   #2980b9;
+    --gray:   #ecf0f1;
+    --text:   #2c3e50;
+  }
+
+  .reveal { font-family: 'Segoe UI', system-ui, sans-serif; color: var(--text); font-size: 22px; }
+  .reveal h1 { font-size: 1.7em; font-weight: 800; }
+  .reveal h2 { font-size: 1.25em; font-weight: 700; color: var(--text); }
+  .reveal h3 { font-size: 1em; font-weight: 600; color: #555; margin-bottom: .35em; }
+  .reveal p, .reveal li { font-size: .82em; line-height: 1.55; }
+
+  /* ── Media ── */
+  .media-wrap { display:flex; justify-content:center; align-items:center; margin: .4em 0; }
+  .media-wrap video,
+  .media-wrap img  { border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.16); max-height: 280px; }
+  .two-img { display:flex; gap:20px; align-items:center; justify-content:center; }
+  .two-img img { border-radius:10px; box-shadow:0 4px 18px rgba(0,0,0,.15); width:190px; }
+  .two-img .arrow { font-size:2em; color:#aaa; }
+
+  /* ── Code block ── */
+  .code-wrap { text-align:left; margin: .4em auto; max-width: 660px; }
+  .code-wrap pre { border-radius:9px; font-size:.66em; box-shadow:0 3px 12px rgba(0,0,0,.09); margin:0; }
+  .code-wrap .hljs { padding: .9em 1.2em; background:#f8f9fa; }
+  .code-label { font-size:.6em; color:#888; text-align:left; max-width:660px; margin:0 auto .15em; letter-spacing:.06em; text-transform:uppercase; }
+
+  /* ── Verdict card ── */
+  .verdict { border-radius:12px; padding:.75em 1.8em; text-align:center; margin:.4em auto; max-width:580px; }
+  .verdict .v-text { font-size:1.45em; font-weight:800; color:#fff; letter-spacing:.01em; }
+  .verdict.pass    { background: var(--green); }
+  .verdict.detect  { background: var(--detect); }
+  .verdict.clean   { background: var(--green); }
+
+  /* ── Similarity ── */
+  .sim-wrap { display:flex; gap:16px; align-items:stretch; max-width:740px; margin:.35em auto; }
+  .sim-img  { flex:0 0 165px; }
+  .sim-img img { width:165px; border-radius:9px; box-shadow:0 3px 14px rgba(0,0,0,.14); }
+  .sim-img p  { font-size:.58em; color:#777; margin:.25em 0 0; text-align:center; }
+  .sim-result { flex:1; display:flex; flex-direction:column; justify-content:center; gap:.6em; }
+  .sim-verdict { border-radius:9px; padding:.5em .9em; text-align:center; font-size:1.1em; font-weight:700; color:#fff; }
+  .sim-verdict.match   { background: var(--green); }
+  .sim-verdict.nomatch { background: var(--detect); }
+  .sim-bar-wrap { background:#ecf0f1; border-radius:7px; overflow:hidden; height:26px; }
+  .sim-bar { height:100%; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:.76em; font-weight:700; color:#fff; transition:width 1s ease; }
+  .sim-bar.match   { background: var(--green); }
+  .sim-bar.nomatch { background: var(--detect); }
+  .sim-score-label { font-size:.62em; color:#888; }
+
+  /* ── Service overview table ── */
+  .reveal table { font-size:.78em; border-collapse:collapse; margin:0 auto; }
+  .reveal table th { background:#f0f0f0; padding:.5em 1em; }
+  .reveal table td { padding:.45em 1em; border-bottom:1px solid #eee; }
+
+  /* ── Pill badges ── */
+  .badge { display:inline-block; border-radius:20px; padding:.15em .7em; font-size:.65em; font-weight:600; }
+  .badge.image { background:#dce8ff; color:#2265d4; }
+  .badge.video { background:#ffe8dc; color:#c05000; }
+
+  /* ── Service icon header ── */
+  .svc-row { display:flex; gap:1.4em; justify-content:center; margin:.8em 0; }
+  .svc-card { border:2px solid #eee; border-radius:12px; padding:.8em 1.4em; text-align:center; min-width:170px; }
+  .svc-card .icon { font-size:1.8em; }
+  .svc-card .name { font-size:.72em; font-weight:600; margin:.3em 0 0; color:#444; }
+
+  /* fragment base */
+  .reveal .fragment { opacity:0; visibility:hidden; transition:opacity .4s ease, transform .4s ease; transform:translateY(12px); }
+  .reveal .fragment.visible { opacity:1; visibility:visible; transform:none; }
+</style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+<!-- ══════════════════════════════════════════════════════
+     TITLE
+══════════════════════════════════════════════════════ -->
+<section>
+  <h1>Authenta</h1>
+  <h2 style="color:#555;font-weight:400;margin-top:.2em">Face Intelligence API</h2>
+  <p style="color:#888;margin:1.2em 0 1.6em">AI-powered face verification for the real world</p>
+  <div class="svc-row">
+    <div class="svc-card">
+      <div class="icon">👁️</div>
+      <div class="name">Liveness Detection</div>
+    </div>
+    <div class="svc-card">
+      <div class="icon">🎭</div>
+      <div class="name">Face Swap Detection</div>
+    </div>
+    <div class="svc-card">
+      <div class="icon">🪪</div>
+      <div class="name">Face Similarity</div>
+    </div>
+  </div>
+  <p style="font-size:.7em;color:#aaa;margin-top:1.4em">Single API call &nbsp;·&nbsp; Image &amp; Video &nbsp;·&nbsp; Results in seconds</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     GETTING STARTED
+══════════════════════════════════════════════════════ -->
+<section>
+  <h2>Getting Started</h2>
+  <p style="color:#888;margin:.3em 0 1em;font-size:.82em">Install the SDK and initialise a client in seconds</p>
+
+  <div class="code-wrap fragment">
+    <div class="code-label">1 &nbsp;— Install</div>
+    <pre><code class="language-bash">pip install authentasdk</code></pre>
+  </div>
+
+  <div class="code-wrap fragment" style="margin-top:.9em">
+    <div class="code-label">2 &nbsp;— Create the client</div>
+    <pre><code class="language-python">from authenta import AuthentaClient
+
+client = AuthentaClient(
+    base_url="https://platform.authenta.ai",
+    client_id="YOUR_CLIENT_ID",
+    client_secret="YOUR_CLIENT_SECRET",
+)</code></pre>
+  </div>
+
+  <div class="fragment" style="margin-top:.9em">
+    <div style="display:flex;gap:1.2em;justify-content:center;flex-wrap:wrap">
+      <div style="background:#f0faf4;border:1.5px solid #a8dfc0;border-radius:10px;padding:.6em 1.1em;font-size:.72em;color:#1e7a44;max-width:200px;text-align:center">
+        <strong>client_id</strong><br/>
+        <span style="color:#555">Provided in your dashboard</span>
+      </div>
+      <div style="background:#f0faf4;border:1.5px solid #a8dfc0;border-radius:10px;padding:.6em 1.1em;font-size:.72em;color:#1e7a44;max-width:200px;text-align:center">
+        <strong>client_secret</strong><br/>
+        <span style="color:#555">Keep private — never expose in client code</span>
+      </div>
+      <div style="background:#eef4ff;border:1.5px solid #aac4f5;border-radius:10px;padding:.6em 1.1em;font-size:.72em;color:#1a4fa0;max-width:200px;text-align:center">
+        <strong>One client, all services</strong><br/>
+        <span style="color:#555">Liveness · Face Swap · Similarity</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     SERVICE 1 OVERVIEW
+══════════════════════════════════════════════════════ -->
+<section>
+  <section>
+    <h2>Service 1 — Liveness Detection</h2>
+    <p style="margin:.6em 0 1em">Is this face <strong>real and live</strong>, or a presentation attack?</p>
+    <ul style="max-width:520px;margin:0 auto">
+      <li>Printed photos held in front of a camera</li>
+      <li>Screen replays of face videos</li>
+      <li>Deep fake video injections</li>
+    </ul>
+    <p style="margin-top:1em;font-size:.8em">
+      <span class="badge image">Image</span>
+      <span class="badge video" style="margin-left:.4em">Video</span>
+      &nbsp;&nbsp;→&nbsp;&nbsp;<code>isLiveness: true / false</code>
+    </p>
+  </section>
+
+  <!-- ── Liveness: Real Video ── -->
+  <section>
+    <h3>Liveness — Real Video</h3>
+    <div class="media-wrap fragment">
+      <video width="480" controls>
+        <source src="../data_samples/face_live_video/real/3.mp4" type="video/mp4" />
+      </video>
+    </div>
+    <div class="code-wrap fragment">
+      <div class="code-label">API call</div>
+      <pre><code class="language-python">media = client.face_intelligence(
+    path="face_live_video/real/3.mp4",
+    model_type="FI-1",
+    livenessCheck=True,
+)</code></pre>
+    </div>
+    <div class="fragment">
+      <div class="verdict pass">
+        <div class="v-text">✅ &nbsp; Live Face: YES</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Liveness: Fake Video ── -->
+  <section>
+    <h3>Liveness — Presentation Attack</h3>
+    <div class="media-wrap fragment">
+      <video width="480" controls>
+        <source src="../data_samples/face_live_video/fake/4.mp4" type="video/mp4" />
+      </video>
+    </div>
+    <div class="code-wrap fragment">
+      <div class="code-label">API call</div>
+      <pre><code class="language-python">media = client.face_intelligence(
+    path="face_live_video/fake/4.mp4",
+    model_type="FI-1",
+    livenessCheck=True,
+)</code></pre>
+    </div>
+    <div class="fragment">
+      <div class="verdict detect">
+        <div class="v-text">● Live Face: NO</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Liveness: Image ── -->
+  <section>
+    <h3>Liveness — Image Input</h3>
+    <div class="media-wrap fragment">
+      <img src="../data_samples/face_live_images/real/1.jpg" width="300" alt="live face" />
+    </div>
+    <div class="code-wrap fragment">
+      <div class="code-label">API call</div>
+      <pre><code class="language-python">media = client.face_intelligence(
+    path="face_live_images/real/1.jpg",
+    model_type="FI-1",
+    livenessCheck=True,
+)</code></pre>
+    </div>
+    <div class="fragment">
+      <div class="verdict pass">
+        <div class="v-text">✅ &nbsp; Live Face: YES</div>
+      </div>
+    </div>
+  </section>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     SERVICE 2 OVERVIEW
+══════════════════════════════════════════════════════ -->
+<section>
+  <section>
+    <h2>Service 2 — Face Swap Detection</h2>
+    <p style="margin:.6em 0 1em">Was this face <strong>AI-generated or swapped</strong> onto the video?</p>
+    <ul style="max-width:520px;margin:0 auto">
+      <li>DeepFaceLab, FaceSwap, Roop, and similar tools</li>
+      <li>Neural face reenactment</li>
+      <li>Synthetic face injection</li>
+    </ul>
+    <p style="margin-top:1em;font-size:.8em">
+      <span class="badge video">Video only</span>
+      &nbsp;&nbsp;→&nbsp;&nbsp;<code>isDeepFake: true / false</code>
+    </p>
+  </section>
+
+  <!-- ── FaceSwap: Fake ── -->
+  <section>
+    <h3>Face Swap — Manipulated Video</h3>
+    <div class="media-wrap fragment">
+      <video width="480" controls>
+        <source src="../data_samples/faceswap/fake/1.mp4" type="video/mp4" />
+      </video>
+    </div>
+    <div class="code-wrap fragment">
+      <div class="code-label">API call</div>
+      <pre><code class="language-python">media = client.face_intelligence(
+    path="faceswap/fake/1.mp4",
+    model_type="FI-1",
+    faceswapCheck=True,
+)</code></pre>
+    </div>
+    <div class="fragment">
+      <div class="verdict pass">
+        <div class="v-text">✅ &nbsp; Face Swap Detected: YES</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FaceSwap: Real ── -->
+  <section>
+    <h3>Face Swap — Authentic Video</h3>
+    <div class="media-wrap fragment">
+      <video width="480" controls>
+        <source src="../data_samples/faceswap/real/1.mp4" type="video/mp4" />
+      </video>
+    </div>
+    <div class="code-wrap fragment">
+      <div class="code-label">API call</div>
+      <pre><code class="language-python">media = client.face_intelligence(
+    path="faceswap/real/1.mp4",
+    model_type="FI-1",
+    faceswapCheck=True,
+)</code></pre>
+    </div>
+    <div class="fragment">
+      <div class="verdict clean">
+        <div class="v-text">✅ &nbsp; Face Swap Detected: NO</div>
+      </div>
+    </div>
+  </section>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     SERVICE 3 OVERVIEW
+══════════════════════════════════════════════════════ -->
+<section>
+  <section>
+    <h2>Service 3 — Face Similarity</h2>
+    <p style="margin:.6em 0 1em">Do these two images belong to <strong>the same person</strong>?</p>
+    <ul style="max-width:540px;margin:0 auto">
+      <li>KYC / identity verification (ID document vs selfie)</li>
+      <li>Access control — match face against enrollment photo</li>
+      <li>Duplicate account detection</li>
+    </ul>
+    <p style="margin-top:1em;font-size:.8em">
+      <span class="badge image">Image only</span>
+      &nbsp;&nbsp;→&nbsp;&nbsp;<code>isSimilar</code> &amp; <code>similarityScore</code> (0–100)
+    </p>
+  </section>
+
+  <!-- ── Similarity: Same ── -->
+  <section>
+    <h3>Face Similarity — Same Person</h3>
+    <div class="two-img fragment">
+      <img src="../data_samples/face_similiar/person_1/A.jpeg" alt="Query" />
+      <span class="arrow">↔</span>
+      <img src="../data_samples/face_similiar/person_1/B.jpeg" alt="Reference" />
+    </div>
+    <div class="code-wrap fragment">
+      <div class="code-label">API call</div>
+      <pre><code class="language-python">media = client.face_intelligence(
+    path="face_similiar/person_1/A.jpeg",
+    reference_img_path="face_similiar/person_1/B.jpeg",
+    model_type="FI-1",
+    faceSimilarityCheck=True,
+)</code></pre>
+    </div>
+    <div class="fragment">
+      <div class="sim-wrap">
+        <div class="sim-img">
+          <img src="../data_samples/face_similiar/person_1/A.jpeg" alt="Q" />
+          <p>Query</p>
+        </div>
+        <div class="sim-result">
+          <div class="sim-verdict match">MATCH ✅</div>
+          <div class="sim-score-label">Similarity Score</div>
+          <div class="sim-bar-wrap">
+            <div class="sim-bar match" style="width:87%">87.0%</div>
+          </div>
+        </div>
+        <div class="sim-img">
+          <img src="../data_samples/face_similiar/person_1/B.jpeg" alt="R" />
+          <p>Reference</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Similarity: Different ── -->
+  <section>
+    <h3>Face Similarity — Different Persons</h3>
+    <div class="two-img fragment">
+      <img src="../data_samples/face_similiar/person_1/A.jpeg" alt="Person 1" />
+      <span class="arrow">↔</span>
+      <img src="../data_samples/face_similiar/person_2/A.jpeg" alt="Person 2" />
+    </div>
+    <div class="code-wrap fragment">
+      <div class="code-label">API call</div>
+      <pre><code class="language-python">media = client.face_intelligence(
+    path="face_similiar/person_1/A.jpeg",
+    reference_img_path="face_similiar/person_2/A.jpeg",
+    model_type="FI-1",
+    faceSimilarityCheck=True,
+)</code></pre>
+    </div>
+    <div class="fragment">
+      <div class="sim-wrap">
+        <div class="sim-img">
+          <img src="../data_samples/face_similiar/person_1/A.jpeg" alt="Q" />
+          <p>Person 1</p>
+        </div>
+        <div class="sim-result">
+          <div class="sim-verdict nomatch">NO MATCH</div>
+          <div class="sim-score-label">Similarity Score</div>
+          <div class="sim-bar-wrap">
+            <div class="sim-bar nomatch" style="width:18%">18.0%</div>
+          </div>
+        </div>
+        <div class="sim-img">
+          <img src="../data_samples/face_similiar/person_2/A.jpeg" alt="R" />
+          <p>Person 2</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     SUMMARY
+══════════════════════════════════════════════════════ -->
+<section>
+  <h2>Summary</h2>
+  <table style="margin:1em auto">
+    <thead>
+      <tr><th>Service</th><th>Result</th><th>Modality</th><th>Latency</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Liveness Detection</strong></td><td><code>isLiveness</code></td><td>Image &amp; Video</td><td>&lt; 10 s</td></tr>
+      <tr><td><strong>Face Swap Detection</strong></td><td><code>isDeepFake</code></td><td>Video</td><td>&lt; 30 s</td></tr>
+      <tr><td><strong>Face Similarity</strong></td><td><code>isSimilar</code>, <code>similarityScore</code></td><td>Image</td><td>&lt; 10 s</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:1.2em;font-size:.8em;color:#666">
+    All three run on a <strong>single model</strong> (<code>FI-1</code>) via one unified API call.
+  </p>
+  <pre style="font-size:.65em;max-width:340px;margin:1em auto;border-radius:8px;padding:.7em 1.2em;background:#f8f9fa;text-align:left"><code>pip install authentasdk</code></pre>
+  <p style="font-size:.7em;color:#aaa">github.com/phospheneai/authenta-python-sdk</p>
+</section>
+
+</div><!-- /slides -->
+</div><!-- /reveal -->
+
+<!-- Reveal.js -->
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+<script>
+Reveal.initialize({
+  hash: true,
+  width: 1100,
+  height: 680,
+  margin: 0.04,
+  minScale: 0.5,
+  maxScale: 1.0,
+  transition: 'slide',
+  transitionSpeed: 'fast',
+  controls: true,
+  progress: true,
+  center: true,
+  plugins: [ RevealHighlight, RevealNotes ],
+  highlight: { highlightOnLoad: true },
+});
+</script>
+</body>
+</html>
