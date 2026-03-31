@@ -322,6 +322,56 @@ class AuthentaClient:
             raise RuntimeError(f"Failed to fetch resultURL: HTTP {resp.status_code}")
         return resp.json()
 
+    def extract_face_vector(
+        self,
+        img_path: str,
+        auto_polling: bool = True,
+        interval: float = 5.0,
+        timeout: float = 600.0,
+    ) -> Dict[str, Any]:
+        """
+        High-level helper for Face Embedding (FE-1):
+        
+        1) upload_file(img_path, "FE-1")
+        2) wait_for_media(mid) (if auto_polling=True)
+        3) get_result(media) → returns embedding
+        Args:
+            img_path: Local path to image
+            auto_polling: If True, waits for processing and returns result
+            interval: Polling interval
+            timeout: Max wait time
+            
+        Returns:
+            If auto_polling=True:
+               media dict with 'result' containing embedding
+            Else:
+               upload metadata
+        """
+        content_type = self._content_type(img_path)
+        if not content_type.startswith("image/"):
+            raise ValueError("FE-1 only supports image input")
+        
+        meta = self.upload_file(img_path, model_type="FE-1")
+        
+        if not auto_polling:
+            return meta
+            
+        mid = meta.get("mid")
+        if not mid:
+            raise RuntimeError("No 'mid' in upload response")
+            
+        media = self.wait_for_media(mid, interval=interval, timeout=timeout)
+        
+        result = self.get_result(media)
+
+        if not isinstance(result, dict) or "embedding" not in result:
+            raise RuntimeError("Invalid FE-1 response: 'embedding' key missing")
+
+        media["result"] = result
+        
+        return media
+    
+    
     def face_intelligence(
             self,
             path: str,
@@ -385,6 +435,7 @@ class AuthentaClient:
         media = self.wait_for_media(mid, interval=interval, timeout=timeout)
         media["result"] = self.get_result(media)
         return media
+    
 
     def delete_media(self, mid: str) -> None:
         """DELETE /api/media/{mid}: delete a media record."""
