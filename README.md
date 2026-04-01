@@ -13,7 +13,8 @@ Welcome to the official documentation for the **Authenta Python SDK** — your g
    - [4.1 AC-1 — AI-Generated Image Detection](#41-ac-1--ai-generated-image-detection)
    - [4.2 DF-1 — Deepfake Video Detection](#42-df-1--deepfake-video-detection)
    - [4.3 FI-1 — Face Intelligence](#43-fi-1--face-intelligence)
-   - [4.4 Media Management](#44-media-management)
+   - [4.4 FE-1 — Face Embedding](#44-fe-1--face-embedding)
+   - [4.5 Media Management](#45-media-management)
 5. [Visualization](#5-visualization)
 6. [Error Handling](#6-error-handling)
 7. [API Reference](#7-api-reference)
@@ -129,6 +130,7 @@ results = await asyncio.gather(
 | `AC-1` | Image | Detects AI-generated or manipulated images (Midjourney, Stable Diffusion, Photoshop, etc.) |
 | `DF-1` | Video | Detects deepfake videos — face swaps, reenactments, and facial manipulations |
 | `FI-1` | Image / Video | Face Intelligence — liveness detection, face swap detection, face similarity comparison |
+| `FE-1` | Image | Extracts 512D face embedding for recognition and matching |
 
 ---
 
@@ -514,7 +516,63 @@ asyncio.run(manual_poll())
 
 ---
 
-### 4.4 Media Management
+### 4.4 FE-1 — Face Embedding
+
+Extract a **512-dimensional face embedding** from an input image for face recognition, similarity matching, and identity verification.
+
+#### Synchronous
+
+```python
+from authenta import AuthentaClient
+
+client = AuthentaClient(
+    base_url="https://platform.authenta.ai",
+    client_id="YOUR_CLIENT_ID",
+    client_secret="YOUR_CLIENT_SECRET",
+)
+
+media = client.extract_face_vector(
+    img_path="samples/face.jpg",
+    auto_polling=True
+)
+
+embedding = media["result"]["embedding"]
+
+print(f"Media ID   : {media['mid']}")
+print(f"Status     : {media['status']}")
+print(f"Vector Dim : {len(embedding)}")  # 512
+```
+
+
+#### Asynchronous
+
+```python
+import asyncio
+from authenta.async_authenta_client import AsyncAuthentaClient
+
+async def extract_embedding():
+    async with AsyncAuthentaClient(
+        base_url="https://platform.authenta.ai",
+        client_id="YOUR_CLIENT_ID",
+        client_secret="YOUR_CLIENT_SECRET",
+    ) as client:
+
+        media = await client.extract_face_vector(
+            img_path="samples/face.jpg",
+            auto_polling=True,
+        )
+
+        embedding = media["result"]["embedding"]
+
+        print(f"Media ID   : {media['mid']}")
+        print(f"Status     : {media['status']}")
+        print(f"Vector Dim : {len(embedding)}")  # 512
+
+asyncio.run(extract_embedding())
+```
+
+
+### 4.5 Media Management
 
 #### Get Media
 
@@ -790,6 +848,22 @@ Raises `ValueError` for invalid combinations (e.g. `faceswapCheck=True` on an im
 
 ---
 
+
+#### `extract_face_vector(img_path, auto_polling=True, interval=5.0, timeout=600.0) -> Dict`
+
+High-level wrapper for the FE-1 Face Embedding model.
+
+| Parameter | Type | Default | Description |
+| :-- | :-- | :-- | :-- |
+| `img_path` | `str` | required | Local path to image |
+| `auto_polling` | `bool` | `True` | `True`: block until done. `False`: return upload metadata immediately |
+| `interval` | `float` | `5.0` | Seconds between polls |
+| `timeout` | `float` | `600.0` | Max wait time |
+
+Returns media dict with `result['embedding']` when `auto_polling=True`.
+
+
+
 #### `upload_file(path, model_type, **kwargs) -> Dict`
 
 Two-step file upload: POST `/api/media` → PUT to S3 presigned URL.
@@ -825,7 +899,12 @@ Fetch the detection output JSON from a processed media dict's `resultURL`.
 | :-- | :-- | :-- |
 | `media` | `dict` | A media dict returned by `face_intelligence()`, `wait_for_media()`, or `get_media()` — must have `status=PROCESSED` and contain a `resultURL` key |
 
-Returns the detection result dict. For FI-1, this contains `isLiveness`, `isDeepFake`, `isSimilar`, `similarityScore`. Raises `ValueError` if `resultURL` is missing.
+Returns the detection result dict.
+
+- For FI-1: contains `isLiveness`, `isDeepFake`, `isSimilar`, `similarityScore`
+- For FE-1: contains `embedding`
+
+Raises `ValueError` if `resultURL` is missing. 
 
 > When `auto_polling=True` (default), `face_intelligence()` calls `get_result()` automatically and attaches the result under `media['result']`. Call `get_result()` explicitly only when using `auto_polling=False` or when working with the async client.
 
@@ -895,6 +974,15 @@ Async equivalent of `AuthentaClient.face_intelligence()`.
 | `timeout` | `float` | `600.0` | Max wait time in seconds |
 
 ---
+
+
+#### `await extract_face_vector(img_path, auto_polling=True, interval=5.0, timeout=600.0) -> Dict`
+
+Async equivalent of face embedding extraction (FE-1).
+
+Returns media dict with `result['embedding']` when `auto_polling=True`.
+
+
 
 #### `await upload_file(path, model_type, **kwargs) -> Dict`
 
