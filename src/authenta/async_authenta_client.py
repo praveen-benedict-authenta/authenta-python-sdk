@@ -379,4 +379,4 @@ class AsyncAuthentaClient:
             
         media["result"] = result
         
-        return
+        return media
