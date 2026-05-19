@@ -48,8 +48,7 @@ from authenta import AuthentaClient
 
 client = AuthentaClient(
     base_url="https://platform.authenta.ai",
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
+    api_key="api_xxxxxxxx...",
 )
 ```
 
@@ -62,8 +61,7 @@ from authenta.async_authenta_client import AsyncAuthentaClient
 async def main():
     async with AsyncAuthentaClient(
         base_url="https://platform.authenta.ai",
-        client_id="YOUR_CLIENT_ID",
-        client_secret="YOUR_CLIENT_SECRET",
+        api_key="api_xxxxxxxx...",
     ) as client:
         # use client here
         pass
@@ -141,8 +139,7 @@ from authenta import AuthentaClient
 
 client = AuthentaClient(
     base_url="https://platform.authenta.ai",
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
+    api_key="api_xxxxxxxx...",
 )
 
 # Detect AI-generated image (blocks until result is ready)
@@ -166,14 +163,13 @@ from authenta import AuthentaClient
 
 client = AuthentaClient(
     base_url="https://platform.authenta.ai",
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
+    api_key="api_xxxxxxxx...",
 )
 
 # One-call: upload + wait for result
 media = client.process("samples/photo.jpg", model_type="AC-1")
 
-print(f"Media ID : {media['mid']}")
+print(f"Job ID   : {media['id']}")
 print(f"Status   : {media['status']}")
 print(f"Is Fake  : {media.get('fake')}")
 print(f"Result   : {media.get('resultURL')}")
@@ -185,13 +181,13 @@ print(f"Heatmap  : {media.get('heatmapURL')}")
 ```python
 # Step 1 — upload
 upload_meta = client.upload_file("samples/photo.jpg", model_type="AC-1")
-mid = upload_meta["mid"]
-print(f"Uploaded. Media ID: {mid}")
+job_id = upload_meta["job"]["id"]
+print(f"Uploaded. Job ID: {job_id}")
 
 # ... do other work ...
 
 # Step 2 — wait for result
-media = client.wait_for_media(mid)
+media = client.wait_for_job(job_id)
 print(f"Status : {media['status']}")
 print(f"Is Fake: {media.get('fake')}")
 ```
@@ -205,8 +201,7 @@ from authenta.async_authenta_client import AsyncAuthentaClient
 async def detect_image():
     async with AsyncAuthentaClient(
         base_url="https://platform.authenta.ai",
-        client_id="YOUR_CLIENT_ID",
-        client_secret="YOUR_CLIENT_SECRET",
+        api_key="api_xxxxxxxx...",
     ) as client:
         # One-call: upload + wait
         media = await client.process("samples/photo.jpg", model_type="AC-1")
@@ -223,10 +218,10 @@ async def detect_image_async():
     async with AsyncAuthentaClient(...) as client:
         # Step 1 — upload
         upload_meta = await client.upload_file("samples/photo.jpg", model_type="AC-1")
-        mid = upload_meta["mid"]
+        job_id = upload_meta["job"]["id"]
 
         # Step 2 — poll when ready
-        media = await client.wait_for_media(mid)
+        media = await client.wait_for_job(job_id)
         print(f"Status : {media['status']}")
         print(f"Is Fake: {media.get('fake')}")
 
@@ -246,14 +241,13 @@ from authenta import AuthentaClient
 
 client = AuthentaClient(
     base_url="https://platform.authenta.ai",
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
+    api_key="api_xxxxxxxx...",
 )
 
 # One-call: upload + wait for result
 media = client.process("samples/video.mp4", model_type="DF-1")
 
-print(f"Media ID    : {media['mid']}")
+print(f"Job ID      : {media['id']}")
 print(f"Status      : {media['status']}")
 print(f"Is Fake     : {media.get('fake')}")
 print(f"Participants: {len(media.get('participants', []))}")
@@ -264,10 +258,10 @@ print(f"Participants: {len(media.get('participants', []))}")
 ```python
 # Step 1 — upload
 upload_meta = client.upload_file("samples/video.mp4", model_type="DF-1")
-mid = upload_meta["mid"]
+job_id = upload_meta["job"]["id"]
 
 # Step 2 — poll with custom interval/timeout
-media = client.wait_for_media(mid, interval=10.0, timeout=900.0)
+media = client.wait_for_job(job_id, interval=10.0, timeout=900.0)
 print(f"Status : {media['status']}")
 print(f"Is Fake: {media.get('fake')}")
 ```
@@ -281,8 +275,7 @@ from authenta.async_authenta_client import AsyncAuthentaClient
 async def detect_deepfake():
     async with AsyncAuthentaClient(
         base_url="https://platform.authenta.ai",
-        client_id="YOUR_CLIENT_ID",
-        client_secret="YOUR_CLIENT_SECRET",
+        api_key="api_xxxxxxxx...",
     ) as client:
         media = await client.process("samples/video.mp4", model_type="DF-1")
         print(f"Status : {media['status']}")
@@ -332,8 +325,7 @@ from authenta import AuthentaClient
 
 client = AuthentaClient(
     base_url="https://platform.authenta.ai",
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
+    api_key="api_xxxxxxxx...",
 )
 
 media = client.face_intelligence(
@@ -342,7 +334,7 @@ media = client.face_intelligence(
     livenessCheck=True,
 )
 
-print(f"Media ID : {media['mid']}")
+print(f"Job ID   : {media['id']}")
 print(f"Status   : {media['status']}")
 print(f"Liveness : {media['result']['isLiveness']}")
 ```
@@ -365,15 +357,13 @@ from authenta.async_authenta_client import AsyncAuthentaClient
 
 sync_client = AuthentaClient(
     base_url="https://platform.authenta.ai",
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
+    api_key="api_xxxxxxxx...",
 )
 
 async def liveness():
     async with AsyncAuthentaClient(
         base_url="https://platform.authenta.ai",
-        client_id="YOUR_CLIENT_ID",
-        client_secret="YOUR_CLIENT_SECRET",
+        api_key="api_xxxxxxxx...",
     ) as async_client:
         media = await async_client.process_FI(
             path="samples/face_video.mp4",
@@ -475,13 +465,13 @@ upload_meta = client.face_intelligence(
     livenessCheck=True,
     auto_polling=False,        # do not block
 )
-mid = upload_meta["mid"]
-print(f"Upload started. Media ID: {mid}")
+job_id = upload_meta["job"]["id"]
+print(f"Upload started. Job ID: {job_id}")
 
 # ... do other work ...
 
 # Step 2 — poll when ready
-media = client.wait_for_media(mid, interval=5.0, timeout=600.0)
+media = client.wait_for_job(job_id, interval=5.0, timeout=600.0)
 
 # Step 3 — fetch result
 result = client.get_result(media)
@@ -501,10 +491,10 @@ async def manual_poll():
             livenessCheck=True,
             auto_polling=False,
         )
-        mid = upload_meta["mid"]
+        job_id = upload_meta["job"]["id"]
 
         # Step 2 — poll when ready
-        media = await async_client.wait_for_media(mid)
+        media = await async_client.wait_for_job(job_id)
 
         # Step 3 — fetch result
         result = sync_client.get_result(media)
@@ -527,8 +517,7 @@ from authenta import AuthentaClient
 
 client = AuthentaClient(
     base_url="https://platform.authenta.ai",
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
+    api_key="api_xxxxxxxx...",
 )
 
 media = client.extract_face_vector(
@@ -538,7 +527,7 @@ media = client.extract_face_vector(
 
 embedding = media["result"]["embedding"]
 
-print(f"Media ID   : {media['mid']}")
+print(f"Job ID     : {media.get('id')}")
 print(f"Status     : {media['status']}")
 print(f"Vector Dim : {len(embedding)}")  # 512
 ```
@@ -553,8 +542,7 @@ from authenta.async_authenta_client import AsyncAuthentaClient
 async def extract_embedding():
     async with AsyncAuthentaClient(
         base_url="https://platform.authenta.ai",
-        client_id="YOUR_CLIENT_ID",
-        client_secret="YOUR_CLIENT_SECRET",
+        api_key="api_xxxxxxxx...",
     ) as client:
 
         media = await client.extract_face_vector(
@@ -564,7 +552,7 @@ async def extract_embedding():
 
         embedding = media["result"]["embedding"]
 
-        print(f"Media ID   : {media['mid']}")
+        print(f"Job ID     : {media.get('id')}")
         print(f"Status     : {media['status']}")
         print(f"Vector Dim : {len(embedding)}")  # 512
 
@@ -574,16 +562,16 @@ asyncio.run(extract_embedding())
 
 ### 4.5 Media Management
 
-#### Get Media
+#### Get Job
 
-Retrieve the current state of a media record by its ID.
+Retrieve the current state of a job by its ID.
 
 **Synchronous**
 
 ```python
-media = client.get_media("YOUR_MEDIA_ID")
-print(f"Status : {media['status']}")
-print(f"Type   : {media.get('type')}")
+job = client.get_job("YOUR_JOB_ID")
+print(f"Status : {job['status']}")
+print(f"Type   : {job.get('type')}")
 ```
 
 **Asynchronous**
@@ -591,8 +579,8 @@ print(f"Type   : {media.get('type')}")
 ```python
 async def get():
     async with AsyncAuthentaClient(...) as client:
-        media = await client.get_media("YOUR_MEDIA_ID")
-        print(f"Status : {media['status']}")
+        job = await client.get_job("YOUR_JOB_ID")
+        print(f"Status : {job['status']}")
 
 asyncio.run(get())
 ```
@@ -607,13 +595,13 @@ Retrieve a paginated list of all media records associated with your account.
 
 ```python
 # All media (default page)
-all_media = client.list_media()
+all_media = client.list_jobs()
 print(f"Total records: {len(all_media.get('items', []))}")
 
 # With pagination
-page_2 = client.list_media(page=2, pageSize=20)
+page_2 = client.list_jobs(page=2, pageSize=20)
 for item in page_2.get("items", []):
-    print(f"  {item['mid']} — {item['status']}")
+    print(f"  {item['id']} — {item['status']}")
 ```
 
 **Asynchronous**
@@ -621,23 +609,23 @@ for item in page_2.get("items", []):
 ```python
 async def list_all():
     async with AsyncAuthentaClient(...) as client:
-        all_media = await client.list_media(page=1, pageSize=50)
+        all_media = await client.list_jobs(page=1, pageSize=50)
         for item in all_media.get("items", []):
-            print(f"  {item['mid']} — {item['status']}")
+            print(f"  {item['id']} — {item['status']}")
 
 asyncio.run(list_all())
 ```
 
 ---
 
-#### Delete Media
+#### Delete Job
 
-Permanently remove a media record and its associated data.
+Permanently remove a job record and its associated data.
 
 **Synchronous**
 
 ```python
-client.delete_media("YOUR_MEDIA_ID")
+client.delete_job("YOUR_JOB_ID")
 print("Deleted.")
 ```
 
@@ -646,7 +634,7 @@ print("Deleted.")
 ```python
 async def delete():
     async with AsyncAuthentaClient(...) as client:
-        await client.delete_media("YOUR_MEDIA_ID")
+        await client.delete_job("YOUR_JOB_ID")
         print("Deleted.")
 
 asyncio.run(delete())
@@ -661,8 +649,8 @@ Poll a known media ID until processing completes. Useful after `upload_file()` o
 **Synchronous**
 
 ```python
-media = client.wait_for_media(
-    mid="YOUR_MEDIA_ID",
+media = client.wait_for_job(
+    job_id="YOUR_JOB_ID",
     interval=5.0,    # seconds between polls
     timeout=600.0,   # max wait time in seconds
 )
@@ -674,8 +662,8 @@ print(f"Final status: {media['status']}")
 ```python
 async def poll():
     async with AsyncAuthentaClient(...) as client:
-        media = await client.wait_for_media(
-            mid="YOUR_MEDIA_ID",
+        media = await client.wait_for_job(
+            job_id="YOUR_JOB_ID",
             interval=5.0,
             timeout=600.0,
         )
@@ -775,14 +763,13 @@ from authenta import (
 
 client = AuthentaClient(
     base_url="https://platform.authenta.ai",
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
+    api_key="api_xxxxxxxx...",
 )
 
 try:
     media = client.process("samples/photo.jpg", model_type="AC-1")
 except AuthenticationError:
-    print("Check your client_id and client_secret.")
+    print("Check your api_key.")
 except QuotaExceededError:
     print("API quota exceeded. Upgrade your plan.")
 except InsufficientCreditsError:
@@ -801,10 +788,10 @@ The same exception classes are raised by `AsyncAuthentaClient`.
 
 ### `AuthentaClient` (Synchronous)
 
-#### `__init__(base_url, client_id, client_secret)`
+#### `__init__(base_url, api_key)`
 
 ```python
-AuthentaClient(base_url: str, client_id: str, client_secret: str)
+AuthentaClient(base_url: str, api_key: str)
 ```
 
 Initializes the synchronous client.
@@ -866,24 +853,24 @@ Returns media dict with `result['embedding']` when `auto_polling=True`.
 
 #### `upload_file(path, model_type, **kwargs) -> Dict`
 
-Two-step file upload: POST `/api/media` → PUT to S3 presigned URL.
+Two-step file upload: POST `/api/v1/jobs` → PUT to S3 presigned URL.
 
 | Parameter | Type | Description |
 | :-- | :-- | :-- |
 | `path` | `str` | Local path to the file |
 | `model_type` | `str` | `"AC-1"`, `"DF-1"`, or `"FI-1"` |
 
-Returns the initial media metadata dict (includes `mid`, `status`, `uploadUrl`).
+Returns the initial job metadata dict (includes `job.id`, `status`, `inputs`).
 
 ---
 
-#### `wait_for_media(mid, interval=5.0, timeout=600.0) -> Dict`
+#### `wait_for_job(job_id, interval=5.0, timeout=600.0) -> Dict`
 
-Poll `GET /api/media/{mid}` until terminal status (`PROCESSED`, `FAILED`, `ERROR`).
+Poll `GET /api/v1/jobs/{job_id}` until terminal status (`COMPLETED`, `PROCESSED`, `FAILED`, `ERROR`, `CANCELLED`, `CANCELED`).
 
 | Parameter | Type | Default | Description |
 | :-- | :-- | :-- | :-- |
-| `mid` | `str` | required | Media ID |
+| `job_id` | `str` | required | Job ID |
 | `interval` | `float` | `5.0` | Seconds between polls |
 | `timeout` | `float` | `600.0` | Max wait time in seconds |
 
@@ -897,7 +884,7 @@ Fetch the detection output JSON from a processed media dict's `resultURL`.
 
 | Parameter | Type | Description |
 | :-- | :-- | :-- |
-| `media` | `dict` | A media dict returned by `face_intelligence()`, `wait_for_media()`, or `get_media()` — must have `status=PROCESSED` and contain a `resultURL` key |
+| `media` | `dict` | A job dict returned by `face_intelligence()`, `wait_for_job()`, or `get_job()` — must have `status=PROCESSED` and contain a `resultURL` key |
 
 Returns the detection result dict.
 
@@ -910,15 +897,15 @@ Raises `ValueError` if `resultURL` is missing.
 
 ---
 
-#### `get_media(mid) -> Dict`
+#### `get_job(job_id) -> Dict`
 
-`GET /api/media/{mid}` — fetch the current state of a media record.
+`GET /api/v1/jobs/{job_id}` — fetch the current state of a media record.
 
 ---
 
-#### `list_media(**params) -> Dict`
+#### `list_jobs(**params) -> Dict`
 
-`GET /api/media` — list all media records.
+`GET /api/v1/jobs` — list all media records.
 
 | Param | Description |
 | :-- | :-- |
@@ -927,9 +914,9 @@ Raises `ValueError` if `resultURL` is missing.
 
 ---
 
-#### `delete_media(mid) -> None`
+#### `delete_job(job_id) -> None`
 
-`DELETE /api/media/{mid}` — permanently delete a media record.
+`DELETE /api/v1/jobs/{job_id}` — permanently delete a media record.
 
 ---
 
@@ -937,13 +924,12 @@ Raises `ValueError` if `resultURL` is missing.
 
 Mirrors `AuthentaClient` with `async/await`. Use as a context manager (`async with`) or call `await client.aclose()` when done.
 
-#### `__init__(base_url, client_id, client_secret, *, timeout=30.0, client=None)`
+#### `__init__(base_url, api_key, *, timeout=30.0, client=None)`
 
 ```python
 AsyncAuthentaClient(
     base_url: str,
-    client_id: str,
-    client_secret: str,
+    api_key: str,
     timeout: float = 30.0,          # httpx client timeout
     client: httpx.AsyncClient = None  # optional pre-built client
 )
@@ -990,24 +976,24 @@ Async two-step upload. Returns initial media metadata.
 
 ---
 
-#### `await wait_for_media(mid, interval=5.0, timeout=600.0) -> Dict`
+#### `await wait_for_job(job_id, interval=5.0, timeout=600.0) -> Dict`
 
 Async poll until terminal status. Raises `TimeoutError` on timeout.
 
 ---
 
-#### `await get_media(mid) -> Dict`
+#### `await get_job(job_id) -> Dict`
 
 Async fetch of a single media record.
 
 ---
 
-#### `await list_media(**params) -> Dict`
+#### `await list_jobs(**params) -> Dict`
 
 Async list of media records.
 
 ---
 
-#### `await delete_media(mid) -> None`
+#### `await delete_job(job_id) -> None`
 
 Async delete of a media record.
