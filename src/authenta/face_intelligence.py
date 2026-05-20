@@ -136,28 +136,25 @@ class FaceIntelligence:
                 }
             )
 
+        parameters = kwargs.pop("parameters", None) or {}
+        for param_key in (
+            "isSingleFace",
+            "faceSwapCheck",
+            "livenessCheck",
+            "faceSimilarityCheck",
+            "similarityCheck",
+            "single_face",
+        ):
+            if param_key in kwargs:
+                parameters[param_key] = kwargs.pop(param_key)
+
         payload = {
             "taskTypeId": str(task_type_id),
             "inputs": inputs,
-            "metadata": {
-                "isSingleFace": kwargs.get(
-                    "isSingleFace",
-                    True,
-                ),
-                "faceSwapCheck": kwargs.get(
-                    "faceSwapCheck",
-                    False,
-                ),
-                "livenessCheck": kwargs.get(
-                    "livenessCheck",
-                    False,
-                ),
-                "faceSimilarityCheck": kwargs.get(
-                    "faceSimilarityCheck",
-                    False,
-                ),
-            },
         }
+
+        if parameters:
+            payload["parameters"] = parameters
 
         resp = requests.post(
             url,

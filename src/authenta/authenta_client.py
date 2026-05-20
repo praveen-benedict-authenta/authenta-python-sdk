@@ -279,6 +279,21 @@ class AuthentaClient:
             "inputs": inputs,
         }
 
+        parameters = kwargs.pop("parameters", None) or {}
+        for param_key in (
+            "isSingleFace",
+            "faceswapCheck",
+            "livenessCheck",
+            "faceSimilarityCheck",
+            "similarityCheck",
+            "single_face",
+        ):
+            if param_key in kwargs:
+                parameters[param_key] = kwargs.pop(param_key)
+
+        if parameters:
+            payload["parameters"] = parameters
+
         payload.update(
             {
                 k: v
