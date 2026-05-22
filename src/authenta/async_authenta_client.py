@@ -11,11 +11,12 @@ async def main():
     )
 
     async with client:
-        media = await client.process(
-            "file_path",
-            model_type="AC-1",
+        media = await client.face_intelligence(
+            "video.mp4",
+            model_type="FI-1",
+            isLivenessCheck=True,
         )
-        print(media.get("status"))
+        print(media["result"])
 
 asyncio.run(main())
 """
@@ -166,7 +167,7 @@ class AsyncAuthentaClient:
         model_type: str,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Create a job and get presigned upload URL(s)."""
+        """POST /api/v1/jobs — create job and get presigned upload URL(s)."""
         url = f"{self.base_url}/api/v1/jobs"
 
         reference_img_path = kwargs.pop("reference_img_path", None)
@@ -195,15 +196,9 @@ class AsyncAuthentaClient:
         }
 
         parameters = kwargs.pop("parameters", None) or {}
-        for param_key in (
-            "isSingleFace",
-            "isFaceswapCheck",
-            "isLivenessCheck",
-            "isSimilarityCheck",
-        ):
+        for param_key in ("isSingleFace", "isFaceswapCheck", "isLivenessCheck", "isSimilarityCheck"):
             if param_key in kwargs:
                 parameters[param_key] = kwargs.pop(param_key)
-
         if parameters:
             payload["parameters"] = parameters
 
@@ -218,7 +213,7 @@ class AsyncAuthentaClient:
     create_media = create_job
 
     async def get_job(self, job_id: str) -> Dict[str, Any]:
-        """Fetch a single job."""
+        """GET /api/v1/jobs/{job_id} — fetch a single job record."""
         url = f"{self.base_url}/api/v1/jobs/{job_id}"
         client = await self._get_client()
         resp = await client.get(url, headers=self._headers())
@@ -229,13 +224,17 @@ class AsyncAuthentaClient:
 
     get_media = get_job
 
-    async def upload_file(
-        self,
-        path: str,
-        model_type: str,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        """Upload file using the Authenta upload flow (create job → PUT to S3)."""
+    async def finalize_job(self, job_id: str) -> Dict[str, Any]:
+        """POST /api/v1/jobs/{job_id}/finalize — signal all S3 uploads complete."""
+        url = f"{self.base_url}/api/v1/jobs/{job_id}/finalize"
+        client = await self._get_client()
+        resp = await client.post(url, headers=self._headers())
+        if not resp.is_success:
+            _raise_for_authenta_error_async(resp)
+        return _safe_json_async(resp)
+
+    async def upload_file(self, path: str, model_type: str, **kwargs) -> Dict[str, Any]:
+        """Upload via the three-step flow: create job → PUT to S3 → (caller calls finalize)."""
         filename = os.path.basename(path)
         content_type = self._content_type(path)
         size = os.path.getsize(path)
@@ -252,14 +251,10 @@ class AsyncAuthentaClient:
         if not inputs:
             raise RuntimeError("No inputs section in create_job response")
 
-        input_map = {
-            item.get("slotName") or "original": item
-            for item in inputs
-        }
+        input_map = {item.get("slotName") or "original": item for item in inputs}
 
         original_input = input_map.get("original") or inputs[0]
         upload_url = original_input.get("uploadUrl")
-
         if not upload_url:
             raise RuntimeError("No uploadUrl in create_job response")
 
@@ -271,7 +266,6 @@ class AsyncAuthentaClient:
                 headers={"Content-Type": content_type},
                 timeout=300.0,
             )
-
         if not put_resp.is_success:
             if 400 <= put_resp.status_code < 500:
                 raise ValidationError(
@@ -295,16 +289,16 @@ class AsyncAuthentaClient:
                     headers={"Content-Type": self._content_type(reference_img_path)},
                     timeout=300.0,
                 )
-                if not ref_resp.is_success:
-                    if 400 <= ref_resp.status_code < 500:
-                        raise ValidationError(
-                            message=ref_resp.text or "Reference upload error",
-                            status_code=ref_resp.status_code,
-                        )
-                    raise ServerError(
-                        message=ref_resp.text or "Reference upload server error",
+            if not ref_resp.is_success:
+                if 400 <= ref_resp.status_code < 500:
+                    raise ValidationError(
+                        message=ref_resp.text or "Reference upload error",
                         status_code=ref_resp.status_code,
                     )
+                raise ServerError(
+                    message=ref_resp.text or "Reference upload server error",
+                    status_code=ref_resp.status_code,
+                )
 
         return meta
 
@@ -318,15 +312,14 @@ class AsyncAuthentaClient:
         interval: float = 5.0,
         timeout: float = 600.0,
     ) -> Dict[str, Any]:
-        """Poll until job reaches a terminal state."""
+        """Poll until job reaches a terminal state. Returns the flat job dict."""
         terminal_statuses = {
             "COMPLETED", "PROCESSED", "FAILED", "ERROR", "CANCELLED", "CANCELED",
         }
         start = time.time()
 
         while True:
-            response = await self.get_job(job_id)
-            job = response.get("job") or response
+            job = await self.get_job(job_id)
             status = (job.get("status") or "").upper()
 
             if status in terminal_statuses:
@@ -345,7 +338,7 @@ class AsyncAuthentaClient:
     # ---------------------------------------------------------
 
     async def list_jobs(self, **params) -> Dict[str, Any]:
-        """List jobs."""
+        """GET /api/v1/jobs — list jobs."""
         url = f"{self.base_url}/api/v1/jobs"
         client = await self._get_client()
         resp = await client.get(url, headers=self._headers(), params=params)
@@ -355,17 +348,8 @@ class AsyncAuthentaClient:
 
     list_media = list_jobs
 
-    async def finalize_job(self, job_id: str) -> Dict[str, Any]:
-        """Signal that all S3 uploads are complete."""
-        url = f"{self.base_url}/api/v1/jobs/{job_id}/finalize"
-        client = await self._get_client()
-        resp = await client.post(url, headers=self._headers())
-        if not resp.is_success:
-            _raise_for_authenta_error_async(resp)
-        return _safe_json_async(resp)
-
     async def cancel_job(self, job_id: str) -> Dict[str, Any]:
-        """Cancel a job."""
+        """POST /api/v1/jobs/{job_id}/cancel."""
         url = f"{self.base_url}/api/v1/jobs/{job_id}/cancel"
         client = await self._get_client()
         resp = await client.post(url, headers=self._headers())
@@ -374,7 +358,7 @@ class AsyncAuthentaClient:
         return _safe_json_async(resp)
 
     async def delete_job(self, job_id: str) -> None:
-        """Delete a job."""
+        """DELETE /api/v1/jobs/{job_id}."""
         url = f"{self.base_url}/api/v1/jobs/{job_id}"
         client = await self._get_client()
         resp = await client.delete(url, headers=self._headers())
@@ -382,6 +366,25 @@ class AsyncAuthentaClient:
             _raise_for_authenta_error_async(resp)
 
     delete_media = delete_job
+
+    # ---------------------------------------------------------
+    # RESULT HELPER
+    # ---------------------------------------------------------
+
+    async def get_result(self, media: Dict[str, Any]) -> Dict[str, Any]:
+        """Fetch result JSON from resultURL."""
+        if isinstance(media, dict) and "result" in media and media["result"] is not None:
+            return media["result"]
+
+        result_url = media.get("resultURL") or media.get("resultUrl")
+        if not result_url:
+            raise ValueError("media dict has no resultURL. Ensure status=PROCESSED/COMPLETED.")
+
+        client = await self._get_client()
+        resp = await client.get(result_url, timeout=30)
+        if not resp.is_success:
+            raise RuntimeError(f"Failed to fetch resultURL: HTTP {resp.status_code}")
+        return resp.json()
 
     # ---------------------------------------------------------
     # HIGH LEVEL HELPERS
@@ -399,15 +402,13 @@ class AsyncAuthentaClient:
 
         job = meta.get("job") or {}
         job_id = str(job.get("id") or meta.get("id") or meta.get("jobId") or "")
-
         if not job_id:
             raise RuntimeError("No job id in upload response")
 
         await self.finalize_job(job_id)
-
         return await self.wait_for_job(job_id, interval=interval, timeout=timeout)
 
-    async def process_FI(
+    async def face_intelligence(
         self,
         path: str,
         model_type: str,
@@ -421,6 +422,13 @@ class AsyncAuthentaClient:
         timeout: float = 600.0,
     ) -> Dict[str, Any]:
         """High-level async helper for Face Integrity (FI-1 model)."""
+        if self._content_type(path).startswith("image/") and isFaceswapCheck:
+            raise ValueError("isFaceswapCheck cannot be True for image media")
+        if self._content_type(path).startswith("video/") and isSimilarityCheck:
+            raise ValueError("isSimilarityCheck cannot be True for video media")
+        if isSimilarityCheck and not reference_img_path:
+            raise ValueError("reference_img_path required when isSimilarityCheck=True")
+
         meta = await self.upload_file(
             path,
             model_type=model_type,
@@ -436,13 +444,17 @@ class AsyncAuthentaClient:
 
         job = meta.get("job") or {}
         job_id = str(job.get("id") or meta.get("id") or meta.get("jobId") or "")
-
         if not job_id:
             raise RuntimeError("No job id in upload response")
 
         await self.finalize_job(job_id)
 
-        return await self.wait_for_job(job_id, interval=interval, timeout=timeout)
+        media = await self.wait_for_job(job_id, interval=interval, timeout=timeout)
+        media["result"] = await self.get_result(media)
+        return media
+
+    # backward-compat alias
+    process_FI = face_intelligence
 
     async def extract_face_vector(
         self,
@@ -462,17 +474,13 @@ class AsyncAuthentaClient:
 
         job = meta.get("job") or {}
         job_id = str(job.get("id") or meta.get("id") or meta.get("jobId") or "")
-
         if not job_id:
             raise RuntimeError("No job id in upload response")
 
         await self.finalize_job(job_id)
 
         media = await self.wait_for_job(job_id, interval=interval, timeout=timeout)
-
-        from .authenta_client import AuthentaClient
-        _sync = AuthentaClient(base_url=self.base_url, api_key=self.api_key)
-        result = _sync.get_result(media)
+        result = await self.get_result(media)
 
         if not isinstance(result, dict) or "embedding" not in result:
             raise RuntimeError("Invalid FE-1 response: 'embedding' key missing")
