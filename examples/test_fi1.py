@@ -33,7 +33,7 @@ print(DIVIDER)
 media = client.face_intelligence(
     path="data_samples/face_live_video/real/1.mp4",
     model_type="FI-1",
-    livenessCheck=True,
+    isLivenessCheck=True,
     auto_polling=True,
 )
 
@@ -52,7 +52,7 @@ print(DIVIDER)
 media = client.face_intelligence(
     path="data_samples/face_live_video/fake/1.mp4",
     model_type="FI-1",
-    livenessCheck=True,
+    isLivenessCheck=True,
     auto_polling=True,
 )
 
@@ -71,7 +71,7 @@ print(DIVIDER)
 media = client.face_intelligence(
     path="data_samples/faceswap/fake/1.mp4",
     model_type="FI-1",
-    faceSwapCheck=True,
+    isFaceswapCheck=True,
     auto_polling=True,
 )
 
@@ -90,7 +90,7 @@ print(DIVIDER)
 media = client.face_intelligence(
     path="data_samples/faceswap/real/1.mp4",
     model_type="FI-1",
-    faceSwapCheck=True,
+    isFaceswapCheck=True,
     auto_polling=True,
 )
 
@@ -110,7 +110,7 @@ media = client.face_intelligence(
     path="data_samples/face_similiar/person_1/A.jpeg",
     reference_img_path="data_samples/face_similiar/person_1/B.jpeg",
     model_type="FI-1",
-    faceSimilarityCheck=True,
+    isSimilarityCheck=True,
     auto_polling=True,
 )
 
@@ -130,7 +130,7 @@ media = client.face_intelligence(
     path="data_samples/face_similiar/person_1/A.jpeg",
     reference_img_path="data_samples/face_similiar/person_2/A.jpeg",
     model_type="FI-1",
-    faceSimilarityCheck=True,
+    isSimilarityCheck=True,
     auto_polling=True,
 )
 
