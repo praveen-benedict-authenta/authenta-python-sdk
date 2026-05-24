@@ -7,13 +7,13 @@ from authenta.authenta_exceptions import AuthenticationError
 
 async def main():
     client = AsyncAuthentaClient(
-        base_url="https://platform.authenta.ai",
-        client_id="...",
-        client_secret="...",
+        base_url="https://platform-prod.authenta.ai",
+        api_key="...",
     )
     async with client:
-        media = await client.process("file_path", model_type="AC-1/DF-1")
-        print(media.get("status"))
+        media = await client.process("file_path", model_type="AC-1")
+        result = client.get_result(media)
+        print(result)
 
 asyncio.run(main())
 
@@ -104,15 +104,14 @@ class AsyncAuthentaClient:
     def __init__(
         self,
         base_url: str,
-        client_id: str,
-        client_secret: str,
+        api_key: str,
         *,
         timeout: float = 30.0,
         client: Optional[httpx.AsyncClient] = None,
     ):
         self.base_url = base_url.rstrip("/")
-        self.client_id = client_id
-        self.client_secret = client_secret
+        self.api_key = api_key
+        self.auth_enabled = bool(api_key)
         self.timeout = timeout
         self._external_client = client
         self._client: Optional[httpx.AsyncClient] = None
@@ -137,15 +136,30 @@ class AsyncAuthentaClient:
         await self.aclose()
 
     def _headers(self) -> Dict[str, str]:
-        return {
-            "x-client-id": self.client_id,
-            "x-client-secret": self.client_secret,
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if self.auth_enabled:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
 
     def _content_type(self, path: str) -> str:
         filetype, _ = mimetypes.guess_type(path)
         return filetype or "application/octet-stream"
+
+    def get_task_id(self, model_type: str) -> str:
+        mapping = {
+            "AC-1": "1",
+            "AF-1": "2",
+            "VF-1": "3",
+            "DF-1": "4",
+            "FD-1": "5",
+            "DI-1": "6",
+            "FL-1": "7",
+            "FI-1": "8",
+        }
+        task_id = mapping.get(model_type.upper())
+        if not task_id:
+            raise ValueError(f"Unknown model_type {model_type!r}. Valid options: {list(mapping.keys())}")
+        return task_id
 
     async def create_media(
         self,
@@ -153,39 +167,46 @@ class AsyncAuthentaClient:
         content_type: str,
         size: int,
         model_type: str,
-        **kwargs
+        **kwargs,
     ) -> Dict[str, Any]:
-        url = f"{self.base_url}/api/media"
-        payload = {
-            "name": name,
+        url = f"{self.base_url}/api/v1/jobs"
+
+        inputs = {
+            "slotName": "original",
             "contentType": content_type,
             "size": size,
-            "modelType": model_type,
+            "filename": name,
         }
-        
-        # Add model-specific parameters to payload
-        if model_type == "FI":
-            # Face Integrity specific parameters
+        payload = {
+            "taskTypeId": self.get_task_id(model_type),
+            "inputs": [inputs],
+        }
+
+        if model_type.upper() == "FI-1":
             fi_params = {
-                "isSingleFace": kwargs.get("isSingleFace"),
-                "faceSwapCheck": kwargs.get("faceSwapCheck"),
-                "livenessCheck": kwargs.get("livenessCheck"),
-                "faceSimilarityCheck": kwargs.get("faceSimilarityCheck"),
+                "isFaceswapCheck": kwargs.get("faceswapCheck"),
+                "isLivenessCheck": kwargs.get("livenessCheck"),
+                "isSimilarityCheck": kwargs.get("faceSimilarityCheck"),
             }
-            # Only add parameters that were explicitly provided (not None)
-            payload.update({k: v for k, v in fi_params.items() if v is not None})
-        else:
-            # For other model types, pass through remaining kwargs
-            payload.update({k: v for k, v in kwargs.items() if v is not None})
-        
+            payload.update({
+                "parameters": {i: j for i, j in fi_params.items()}
+            })
+            if kwargs.get("reference_path"):
+                payload["inputs"].append({
+                    "slotName": "reference",
+                    "contentType": self._content_type(kwargs.get("reference_path")),
+                    "size": os.path.getsize(kwargs.get("reference_path")),
+                    "filename": os.path.basename(kwargs.get("reference_path")),
+                })
+
         client = await self._get_client()
         resp = await client.post(url, json=payload, headers=self._headers())
         if not resp.is_success:
             _raise_for_authenta_error_async(resp)
         return _safe_json_async(resp)
 
-    async def get_media(self, mid: str) -> Dict[str, Any]:
-        url = f"{self.base_url}/api/media/{mid}"
+    async def get_media(self, jobid: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/jobs/{jobid}"
         client = await self._get_client()
         resp = await client.get(url, headers=self._headers())
         if not resp.is_success:
@@ -202,146 +223,140 @@ class AsyncAuthentaClient:
             content_type=content_type,
             size=size,
             model_type=model_type,
-            **kwargs
+            **kwargs,
         )
-        upload_url = meta.get("uploadUrl")
+        upload_url = meta["inputs"][0]["uploadUrl"]
         if not upload_url:
             raise RuntimeError("No uploadUrl in create_media response")
 
         client = await self._get_client()
-        # S3 presigned PUT; usually no JSON error schema
         with open(path, "rb") as f:
-            resp = await client.put(
+            put_resp = await client.put(
                 upload_url,
-                content=f,
+                content=f.read(),
                 headers={"Content-Type": content_type},
                 timeout=300.0,
             )
-        if not resp.is_success:
-            # Map 4xx/5xx to ValidationError/ServerError
-            if 400 <= resp.status_code < 500:
-                raise ValidationError(
-                    message=resp.text or "Upload client error",
-                    status_code=resp.status_code,
-                )
-            if resp.status_code >= 500:
-                raise ServerError(
-                    message=resp.text or "Upload server error",
-                    status_code=resp.status_code,
-                )
-            resp.raise_for_status()
+
+        if model_type.upper() == "FI-1":
+            reference_img_url = meta["inputs"][1]["uploadUrl"] if len(meta["inputs"]) > 1 else None
+            if reference_img_url:
+                with open(kwargs.get("reference_path"), "rb") as f:
+                    ref_resp = await client.put(
+                        reference_img_url,
+                        content=f.read(),
+                        headers={"Content-Type": self._content_type(kwargs.get("reference_path"))},
+                        timeout=300.0,
+                    )
+                    ref_resp.raise_for_status()
+
+        put_resp.raise_for_status()
         return meta
+
+    async def finalize_media(self, jobid: str) -> bool:
+        url = f"{self.base_url}/api/v1/jobs/{jobid}/finalize"
+        client = await self._get_client()
+        resp = await client.post(url, headers=self._headers())
+        if not resp.is_success:
+            _raise_for_authenta_error_async(resp)
+        return resp.status_code == 200
 
     async def wait_for_media(
         self,
-        mid: str,
+        jobid: str,
         interval: float = 5.0,
         timeout: float = 600.0,
     ) -> Dict[str, Any]:
         """
-        Poll GET /api/media/{mid} until it reaches a terminal status.
-        Terminal: PROCESSED, FAILED, ERROR.
+        Poll GET /api/v1/jobs/{jobid} until it reaches a terminal status.
+
+        Terminal statuses: COMPLETED, PROCESSED, FAILED, ERROR.
+        Raises TimeoutError if 'timeout' seconds elapse without a terminal state.
         """
         start = time.time()
         while True:
-            media = await self.get_media(mid)
-            status = (media.get("status") or "").upper()
-            if status in {"PROCESSED", "FAILED", "ERROR"}:
+            media = await self.get_media(jobid)
+            status = (media["status"] or "").upper()
+            if status in {"COMPLETED", "PROCESSED", "FAILED", "ERROR"}:
                 return media
             if time.time() - start > timeout:
                 raise TimeoutError(
-                    f"Timed out waiting for media {mid}, last status={status!r}"
+                    f"Timed out waiting for media {jobid}, last status={status!r}"
                 )
             await asyncio.sleep(interval)
 
     async def list_media(self, **params) -> Dict[str, Any]:
-        url = f"{self.base_url}/api/media"
+        """GET /api/v1/jobs: list jobs for this client."""
+        url = f"{self.base_url}/api/v1/jobs"
         client = await self._get_client()
         resp = await client.get(url, headers=self._headers(), params=params)
         if not resp.is_success:
             _raise_for_authenta_error_async(resp)
         return _safe_json_async(resp)
 
-    async def delete_media(self, mid: str) -> None:
-        url = f"{self.base_url}/api/media/{mid}"
-        client = await self._get_client()
-        resp = await client.delete(url, headers=self._headers())
-        if not resp.is_success:
-            _raise_for_authenta_error_async(resp)
-
     async def process(
         self,
-        path: str,
+        original_path: str,
         model_type: str,
-        interval: float = 5.0,
-        timeout: float = 600.0,
-    ) -> Dict[str, Any]:
-        """
-        High-level async helper:
-          1) await upload_file(path, model_type) -> get mid
-          2) await wait_for_media(mid)
-        """
-        meta = await self.upload_file(path, model_type=model_type)
-        mid = meta.get("mid")
-        if not mid:
-            raise RuntimeError("No 'mid' in upload response")
-        return await self.wait_for_media(mid, interval=interval, timeout=timeout)
-        
-
-
-    async def process_FI(
-        self,
-        path: str,
-        model_type: str,
-        isSingleFace: Optional[bool] = None,
-        faceSwapCheck: Optional[bool] = None,
-        livenessCheck: Optional[bool] = None,
-        faceSimilarityCheck: Optional[bool] = None,
+        reference_path: Optional[str] = None,
+        faceswapCheck: Optional[bool] = False,
+        livenessCheck: Optional[bool] = False,
+        faceSimilarityCheck: Optional[bool] = False,
         auto_polling: bool = True,
         interval: float = 5.0,
         timeout: float = 600.0,
     ) -> Dict[str, Any]:
         """
-        High-level async helper for Face Integrity (FI) model:
-          1) await upload_file(path, model_type, **fi_params) -> get mid
-          2) await wait_for_media(mid) (only if auto_polling=True)
-
-        Args:
-            path: Local path to the media file.
-            model_type: Detection model type to use (e.g., "FI-1").
-            isSingleFace: Whether to check for a single face.
-            faceSwapCheck: Whether to check for face swapping.
-            livenessCheck: Whether to check for liveness.
-            faceSimilarityCheck: Whether to check for face similarity.
-            auto_polling: If True (default), awaits until processing completes via
-                wait_for_media(). If False, returns immediately after upload with
-                the initial media metadata (including 'mid') so you can poll manually.
-            interval: Polling interval in seconds (used only when auto_polling=True).
-            timeout: Timeout in seconds (used only when auto_polling=True).
-
-        Returns:
-            If auto_polling=True: the final processed media JSON.
-            If auto_polling=False: the initial upload metadata dict (includes 'mid').
+        High-level helper:
+          1) upload_file(path, model_type) -> get jobid
+          2) finalize_media(jobid)
+          3) wait_for_media(jobid) (if auto_polling=True)
         """
-        # Build FI-specific parameters
+        if self._content_type(original_path).startswith("image/") and faceswapCheck:
+            raise ValueError("faceswapCheck cannot be True for image media")
+        if self._content_type(original_path).startswith("video/") and faceSimilarityCheck:
+            raise ValueError("faceSimilarityCheck cannot be True for video media")
+        if faceSimilarityCheck and not reference_path:
+            raise ValueError("reference_path must be provided if faceSimilarityCheck is True")
+
         fi_params = {
-            "isSingleFace": isSingleFace,
-            "faceSwapCheck": faceSwapCheck,
+            "reference_path": reference_path,
+            "faceswapCheck": faceswapCheck,
             "livenessCheck": livenessCheck,
             "faceSimilarityCheck": faceSimilarityCheck,
         }
-        # Remove None values to avoid sending unnecessary params
-        fi_params = {k: v for k, v in fi_params.items() if v is not None}
 
-        meta = await self.upload_file(path, model_type=model_type, **fi_params)
+        meta = await self.upload_file(original_path, model_type=model_type, **fi_params)
+        resp = await self.finalize_media(meta["job"]["id"])
+        if not resp:
+            raise RuntimeError("Failed to finalize media after upload")
+
         if not auto_polling:
             return meta
-        mid = meta.get("mid")
-        if not mid:
-            raise RuntimeError("No 'mid' in upload response")
-        return await self.wait_for_media(mid, interval=interval, timeout=timeout)
 
-    
+        jobid = meta["job"]["id"]
+        if not jobid:
+            raise RuntimeError("No 'jobid' in upload response")
+        return await self.wait_for_media(jobid, interval=interval, timeout=timeout)
+
+    def get_result(self, media: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Fetch the detection result JSON from the media's artifact downloadUrl.
+
+        Args:
+            media: A media dict returned by process() or wait_for_media() —
+                   must contain an 'artifacts' key with a downloadUrl.
+
+        Returns:
+            Parsed detection result dict.
+        """
+        result_url = media["artifacts"][-1]["downloadUrl"]
+        if not result_url:
+            raise ValueError("media dict has no downloadUrl. Ensure processing is complete.")
+        resp = httpx.get(result_url, timeout=30)
+        if not resp.is_success:
+            raise RuntimeError(f"Failed to fetch result: HTTP {resp.status_code}")
+        return resp.json()
 
     async def extract_face_vector(
         self,
@@ -350,33 +365,47 @@ class AsyncAuthentaClient:
         interval: float = 5.0,
         timeout: float = 600.0,
     ) -> Dict[str, Any]:
-        
+        """
+        High-level helper for Face Embedding (FE-1):
+
+        1) upload_file(img_path, "FE-1")
+        2) wait_for_media(jobid) (if auto_polling=True)
+        3) get_result(media) → returns embedding
+
+        Args:
+            img_path: Local path to image
+            auto_polling: If True, waits for processing and returns result with 'result' key
+            interval: Polling interval
+            timeout: Max wait time
+        """
         content_type = self._content_type(img_path)
         if not content_type.startswith("image/"):
             raise ValueError("FE-1 only supports image input")
-        
+
         meta = await self.upload_file(img_path, model_type="FE-1")
+
         if not auto_polling:
             return meta
-            
-        mid = meta.get("mid")
-        if not mid:
-            raise RuntimeError("No 'mid' in upload response")
-            
-        media = await self.wait_for_media(mid, interval=interval, timeout=timeout)
-        
-        from authenta import AuthentaClient
-        sync_client = AuthentaClient(
-            base_url=self.base_url,
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-        )
-        
-        result = sync_client.get_result(media)
-        
+
+        jobid = meta["job"]["id"]
+        if not jobid:
+            raise RuntimeError("No 'jobid' in upload response")
+
+        media = await self.wait_for_media(jobid, interval=interval, timeout=timeout)
+
+        result = self.get_result(media)
+
         if not isinstance(result, dict) or "embedding" not in result:
             raise RuntimeError("Invalid FE-1 response: 'embedding' key missing")
-            
+
         media["result"] = result
-        
+
         return media
+
+    async def delete_media(self, jobid: str) -> None:
+        """DELETE /api/v1/jobs/{jobid}: delete a media record."""
+        url = f"{self.base_url}/api/v1/jobs/{jobid}"
+        client = await self._get_client()
+        resp = await client.delete(url, headers=self._headers())
+        if not resp.is_success:
+            _raise_for_authenta_error_async(resp)

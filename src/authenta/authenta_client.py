@@ -1,7 +1,7 @@
 """
 example usage:
 client = AuthentaClient(
-    base_url="https://platform.authenta.ai",
+    base_url="https://platform-prod.authenta.ai",
     client_id="...",
     client_secret="...",
 )
@@ -97,26 +97,27 @@ class AuthentaClient:
     - Process deepfake-detection.
     """
 
-    def __init__(self, base_url: str, client_id: str, client_secret: str):
+    def __init__(self, base_url: str, api_key: str):
         """
         Create new Authenta client.
 
         Args:
-            base_url: Authenta API base URL, e.g. "https://platform.authenta.ai".
-            client_id: Your Authenta client ID.
-            client_secret: Your Authenta client secret.
+            base_url: Authenta API base URL, e.g. "https://platform-prod.authenta.ai".
+            api_key: Your Authenta API key.
         """
         self.base_url = base_url.rstrip("/")
-        self.client_id = client_id
-        self.client_secret = client_secret
+        self.api_key = api_key
+        self.auth_enabled = bool(api_key)
 
     def _headers(self) -> Dict[str, str]:
         """Return default headers for Authenta API calls."""
-        return {
-            "x-client-id": self.client_id,
-            "x-client-secret": self.client_secret,
+        headers = {
             "Content-Type": "application/json",
         }
+        if self.auth_enabled:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        return headers
 
     def _content_type(self, path: str) -> str:
         """
@@ -126,6 +127,30 @@ class AuthentaClient:
         """
         filetype, _ = mimetypes.guess_type(path)
         return filetype or "application/octet-stream"
+
+
+    def get_task_id(self, model_type: str) -> str:
+        """
+        Map a model_type to a task_id.
+
+        This is a placeholder implementation. In a real implementation, you might
+        fetch this mapping from the API or maintain an up-to-date hardcoded dict.
+        """
+        mapping = {
+            "AC-1": "1",
+            "AF-1": "2",
+            "VF-1": "3",
+            "DF-1": "4",
+            "FD-1": "5",
+            "DI-1": "6",
+            "FL-1": "7",
+            "FI-1": "8",
+
+        }
+        task_id = mapping.get(model_type.upper())
+        if not task_id:
+            raise ValueError(f"Unknown model_type {model_type!r}. Valid options: {list(mapping.keys())}")
+        return task_id
 
     def create_media(
         self,
@@ -145,44 +170,58 @@ class AuthentaClient:
             model_type: Detection model type, e.g. "AC-1" or "DF-1".
 
         Returns:
-            Parsed JSON response containing at least 'mid' and 'uploadUrl'.
+            Parsed JSON response containing at least 'jobid' and 'uploadUrl'.
         """
-        url = f"{self.base_url}/api/media"
+        url = f"{self.base_url}/api/v1/jobs"
+
+        inputs = {
+            "slotName": "original",
+            "contentType": content_type,
+            "fileName": name,
+            "sizeBytes": size,
+        }
 
         payload = {
-            "name": name,
-            "contentType": content_type,
-            "size": size,
-            "modelType": model_type,
+            "taskTypeId": str(self.get_task_id(model_type)),
+            "inputs": [inputs],
         }
 
         if model_type.upper() == "FI-1":
             fi_params = {
-                "isSingleFace": kwargs.get("isSingleFace", True),
-                "faceswapCheck": kwargs.get("faceswapCheck"),
-                "livenessCheck": kwargs.get("livenessCheck"),
-                "faceSimilarityCheck": kwargs.get("faceSimilarityCheck"),
+                "isFaceswapCheck": kwargs.get("faceswapCheck"),
+                "isLivenessCheck": kwargs.get("livenessCheck"),
+                "isSimilarityCheck": kwargs.get("faceSimilarityCheck"),
             }
             payload.update({
-                "metadata": {i: j for i, j in fi_params.items()}
+                "parameters": {i: j for i, j in fi_params.items()}
             })
+            if kwargs.get("reference_path"):
+                print(f"Adding reference image {kwargs.get('reference_path')}...")
+                payload[inputs].update({
+                    "slotName": "reference",
+                    "contentType": self._content_type(kwargs.get("reference_path")),
+                    "sizeBytes": os.path.getsize(kwargs.get("reference_path")),
+                    "fileName": os.path.basename(kwargs.get("reference_path")).split(".")[0],
+                })
 
+        print(f"Creating media record function")
         resp = requests.post(url, json=payload, headers=self._headers(), timeout=30)
+        print(f"Create media response: {resp.status_code} {resp.text[:200]}")
         if not resp.ok:
             _raise_for_authenta_error(resp)
         return _safe_json(resp)
 
-    def get_media(self, mid: str) -> Dict[str, Any]:
+    def get_media(self, jobid: str) -> Dict[str, Any]:
         """
-        GET /api/media/{mid}: fetch a single media record.
+        GET /api/v1/jobs/{jobid}: fetch a single job record.
 
         Args:
-            mid: Media ID returned by create_media / upload_file.
+            jobid: Job ID returned by create_media / upload_file.
 
         Returns:
             Parsed JSON media record.
         """
-        url = f"{self.base_url}/api/media/{mid}"
+        url = f"{self.base_url}/api/v1/jobs/{jobid}"
         resp = requests.get(url, headers=self._headers(), timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
@@ -193,7 +232,7 @@ class AuthentaClient:
         Upload a file via the two-step Authenta media flow.
 
         Steps:
-            1) POST /api/media to create the record and obtain 'mid' + 'uploadUrl'.
+            1) POST /api/v1/jobs to create the record and obtain 'jobid' + 'uploadUrl'.
             2) PUT the file bytes to the presigned S3 'uploadUrl'.
 
         Args:
@@ -201,12 +240,12 @@ class AuthentaClient:
             model_type: Detection model type to use, e.g. "AC-1" or "DF-1".
 
         Returns:
-            The JSON response from POST /api/media (includes 'mid', 'status', etc.).
+            The JSON response from POST /api/v1/jobs (includes 'jobid', 'status', etc.).
         """
-        filename = os.path.basename(path)
+        filename = os.path.basename(path).split(".")[0]
         content_type = self._content_type(path)
         size = os.path.getsize(path)
-
+        print(f"Creating media record for {filename} (type={content_type}, size={size} bytes) with model {model_type}...")
         meta = self.create_media(
             name=filename,
             content_type=content_type,
@@ -214,10 +253,10 @@ class AuthentaClient:
             model_type=model_type,
             **kwargs,
         )
-        upload_url = meta.get("uploadUrl")
+        upload_url = meta["inputs"][0]["uploadUrl"]
         if not upload_url:
             raise RuntimeError("No uploadUrl in create_media response")
-
+        print(f"Uploading {filename} to S3...")
         with open(path, "rb") as f:
             put_resp = requests.put(
                 upload_url,
@@ -227,13 +266,14 @@ class AuthentaClient:
             )
 
         if model_type.upper() == "FI-1":
-            reference_img_url = meta.get("referenceUploadUrl")
+            reference_img_url = meta["inputs"][1]["uploadUrl"]
+            print(f"Uploading reference image {kwargs.get('reference_path')}...")
             if reference_img_url:
-                with open(kwargs.get("reference_img_path"), "rb") as f:
+                with open(kwargs.get("reference_path"), "rb") as f:
                     ref_res = requests.put(
                         reference_img_url,
                         data=f,
-                        headers={"Content-Type": self._content_type(kwargs.get("reference_img_path"))},
+                        headers={"Content-Type": self._content_type(kwargs.get("reference_path"))},
                         timeout=300,
                     )
                     ref_res.raise_for_status()
@@ -241,37 +281,45 @@ class AuthentaClient:
         put_resp.raise_for_status()
         return meta
 
+
+    def finalize_media(self, jobid: str) -> None:
+        url = f"{self.base_url}/api/v1/jobs/{jobid}/finalize"
+        resp = requests.post(url, headers=self._headers(), timeout=30)
+        if not resp.ok:
+            _raise_for_authenta_error(resp)
+        return resp.status_code == 200
+
     def wait_for_media(
         self,
-        mid: str,
+        jobid: str,
         interval: float = 5.0,
         timeout: float = 600.0,
     ) -> Dict[str, Any]:
         """
-        Poll GET /api/media/{mid} until it reaches a terminal status.
+        Poll GET /api/v1/jobs/{jobid} until it reaches a terminal status.
 
         Terminal statuses: PROCESSED, FAILED, ERROR.
         Raises TimeoutError if 'timeout' seconds elapse without a terminal state.
         """
         start = time.time()
         while True:
-            media = self.get_media(mid)
-            status = (media.get("status") or "").upper()
-            if status in {"PROCESSED", "FAILED", "ERROR"}:
+            media = self.get_media(jobid)
+            status = (media["status"] or "").upper()
+            if status in {"COMPLETED", "PROCESSED", "FAILED", "ERROR"}:
                 return media
             if time.time() - start > timeout:
                 raise TimeoutError(
-                    f"Timed out waiting for media {mid}, last status={status!r}"
+                    f"Timed out waiting for media {jobid}, last status={status!r}"
                 )
             time.sleep(interval)
 
     def list_media(self, **params) -> Dict[str, Any]:
         """
-        GET /api/media: list media for this client.
+        GET /api/v1/jobs: list jobs for this client.
 
         Accepts optional query params (page, pageSize, filters) if the API supports them.
         """
-        url = f"{self.base_url}/api/media"
+        url = f"{self.base_url}/api/v1/jobs"
         resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
@@ -279,21 +327,53 @@ class AuthentaClient:
 
     def process(
         self,
-        path: str,
+        original_path: str,
         model_type: str,
+        reference_path: Optional[str] = None,
+        faceswapCheck: Optional[bool] = False,
+        livenessCheck: Optional[bool] = False,
+        faceSimilarityCheck: Optional[bool] = False,
+        auto_polling: bool = True,
         interval: float = 5.0,
         timeout: float = 600.0,
     ) -> Dict[str, Any]:
         """
         High-level helper:
-          1) upload_file(path, model_type) -> get mid
-          2) wait_for_media(mid)
+          1) upload_file(path, model_type) -> get jobid
+          2) wait_for_media(jobid)
         """
-        meta = self.upload_file(path, model_type=model_type)
-        mid = meta.get("mid")
-        if not mid:
-            raise RuntimeError("No 'mid' in upload response")
-        return self.wait_for_media(mid, interval=interval, timeout=timeout)
+        if self._content_type(original_path).startswith("image/") and faceswapCheck:
+            raise ValueError("faceswapCheck cannot be True for image media")
+        if self._content_type(original_path).startswith("video/") and faceSimilarityCheck:
+            raise ValueError("faceSimilarityCheck cannot be True for video media")
+        if faceSimilarityCheck and not reference_path:
+            raise ValueError("reference_path must be provided if faceSimilarityCheck is True")
+        if model_type.upper() == "FI-1":
+            fi_params = {
+                "reference_path": reference_path,
+                "faceswapCheck": faceswapCheck,
+                "livenessCheck": livenessCheck,
+                "faceSimilarityCheck": faceSimilarityCheck,
+            }
+        else:
+            fi_params = {}
+        print(f"Uploading {original_path} for model {model_type}...")
+        meta = self.upload_file(original_path, model_type=model_type, **fi_params)
+        print(f"Upload successful, waiting for processing...")
+        resp = self.finalize_media(meta["job"]["id"])
+        print(f"Finalize response: {resp}")
+        if not resp:
+            raise RuntimeError("Failed to finalize media after upload")
+        
+        if not auto_polling:
+            return meta
+        jobid = meta["job"]["id"]
+        if not jobid:
+            raise RuntimeError("No 'jobid' in upload response")
+        media = self.wait_for_media(jobid, interval=interval, timeout=timeout)
+        print(f"Media processing completed with status {media}")
+        
+        return media
 
     def get_result(self, media: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -314,80 +394,14 @@ class AuthentaClient:
             ValueError: If the media dict has no resultURL.
             RuntimeError: If the resultURL fetch fails.
         """
-        result_url = media.get("resultURL")
+        result_url = media["artifacts"][-1]["downloadUrl"]
+        print(result_url)
         if not result_url:
             raise ValueError("media dict has no 'resultURL'. Ensure processing is complete (status=PROCESSED).")
         resp = requests.get(result_url, timeout=30)
         if not resp.ok:
             raise RuntimeError(f"Failed to fetch resultURL: HTTP {resp.status_code}")
         return resp.json()
-
-    
-    
-    
-    def face_intelligence(
-            self,
-            path: str,
-            model_type: str,
-            reference_img_path: Optional[str] = None,
-            isSingleFace: Optional[bool] = True,
-            faceswapCheck: Optional[bool] = False,
-            livenessCheck: Optional[bool] = False,
-            faceSimilarityCheck: Optional[bool] = False,
-            auto_polling: bool = True,
-            interval: float = 5.0,
-            timeout: float = 600.0,
-    ) -> Dict[str, Any]:
-        """
-        High-level helper for Face Integrity (FI) model:
-          1) upload_file(path, model_type) -> get mid
-          2) wait_for_media(mid) (only if auto_polling=True)
-          3) get_result(media) to fetch detection output (only if auto_polling=True)
-
-        Args:
-            path: Local path to the media file.
-            model_type: Detection model type to use, e.g. "FI-1".
-            reference_img_path: Required when faceSimilarityCheck=True.
-            isSingleFace: Whether to check for a single face.
-            faceswapCheck: Whether to check for face swapping (video only).
-            livenessCheck: Whether to check for liveness.
-            faceSimilarityCheck: Whether to check for face similarity (image only).
-            auto_polling: If True (default), blocks until processing completes and
-                automatically fetches the detection result from resultURL, merging
-                it into the returned dict under the key 'result'.
-                If False, returns immediately after upload with initial metadata.
-            interval: Polling interval in seconds (used only when auto_polling=True).
-            timeout: Timeout in seconds (used only when auto_polling=True).
-
-        Returns:
-            If auto_polling=True: media dict with an added 'result' key containing
-                the full detection output fetched from resultURL.
-            If auto_polling=False: the initial upload metadata dict (includes 'mid').
-        """
-        if self._content_type(path).startswith("image/") and faceswapCheck:
-            raise ValueError("faceswapCheck cannot be True for image media")
-        if self._content_type(path).startswith("video/") and faceSimilarityCheck:
-            raise ValueError("faceSimilarityCheck cannot be True for video media")
-        if faceSimilarityCheck and not reference_img_path:
-            raise ValueError("reference_img_path must be provided if faceSimilarityCheck is True")
-
-        fi_params = {
-            "reference_img_path": reference_img_path,
-            "isSingleFace": isSingleFace,
-            "faceswapCheck": faceswapCheck,
-            "livenessCheck": livenessCheck,
-            "faceSimilarityCheck": faceSimilarityCheck,
-        }
-
-        meta = self.upload_file(path, model_type=model_type, **fi_params)
-        if not auto_polling:
-            return meta
-        mid = meta.get("mid")
-        if not mid:
-            raise RuntimeError("No 'mid' in upload response")
-        media = self.wait_for_media(mid, interval=interval, timeout=timeout)
-        media["result"] = self.get_result(media)
-        return media
 
 
     def extract_face_vector(
@@ -401,7 +415,7 @@ class AuthentaClient:
         High-level helper for Face Embedding (FE-1):
         
         1) upload_file(img_path, "FE-1")
-        2) wait_for_media(mid) (if auto_polling=True)
+        2) wait_for_media(jobid) (if auto_polling=True)
         3) get_result(media) → returns embedding
         Args:
             img_path: Local path to image
@@ -424,25 +438,25 @@ class AuthentaClient:
         if not auto_polling:
             return meta
             
-        mid = meta.get("mid")
-        if not mid:
-            raise RuntimeError("No 'mid' in upload response")
+        jobid = meta.get("jobid")
+        if not jobid:
+            raise RuntimeError("No 'jobid' in upload response")
             
-        media = self.wait_for_media(mid, interval=interval, timeout=timeout)
+        media = self.wait_for_media(jobid, interval=interval, timeout=timeout)
         
         result = self.get_result(media)
 
         if not isinstance(result, dict) or "embedding" not in result:
             raise RuntimeError("Invalid FE-1 response: 'embedding' key missing")
 
-        media["result"] = result
         
-        return media
+        
+        return result
     
 
-    def delete_media(self, mid: str) -> None:
-        """DELETE /api/media/{mid}: delete a media record."""
-        url = f"{self.base_url}/api/media/{mid}"
+    def delete_media(self, jobid: str) -> None:
+        """DELETE /api/v1/jobs/{jobid}: delete a media record."""
+        url = f"{self.base_url}/api/v1/jobs/{jobid}"
         resp = requests.delete(url, headers=self._headers(), timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
