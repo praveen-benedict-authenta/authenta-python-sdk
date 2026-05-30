@@ -7,7 +7,7 @@ from authenta.authenta_exceptions import AuthenticationError
 
 async def main():
     client = AsyncAuthentaClient(
-        base_url="https://platform-prod.authenta.ai",
+        base_url="https://platform.authenta.ai",
         api_key="...",
     )
     async with client:
@@ -174,11 +174,11 @@ class AsyncAuthentaClient:
         inputs = {
             "slotName": "original",
             "contentType": content_type,
-            "size": size,
-            "filename": name,
+            "fileName": name,
+            "sizeBytes": size,
         }
         payload = {
-            "taskTypeId": self.get_task_id(model_type),
+            "taskTypeId": str(self.get_task_id(model_type)),
             "inputs": [inputs],
         }
 
@@ -188,15 +188,16 @@ class AsyncAuthentaClient:
                 "isLivenessCheck": kwargs.get("livenessCheck"),
                 "isSimilarityCheck": kwargs.get("faceSimilarityCheck"),
             }
-            payload.update({
-                "parameters": {i: j for i, j in fi_params.items()}
-            })
+            payload["parameters"] = {k: v for k, v in fi_params.items() if v is not None}
+
             if kwargs.get("reference_path"):
+                print(f"Adding reference image {kwargs.get('reference_path')}...")
+                reference_path = kwargs.get("reference_path")
                 payload["inputs"].append({
                     "slotName": "reference",
-                    "contentType": self._content_type(kwargs.get("reference_path")),
-                    "size": os.path.getsize(kwargs.get("reference_path")),
-                    "filename": os.path.basename(kwargs.get("reference_path")),
+                    "contentType": self._content_type(reference_path),
+                    "sizeBytes": os.path.getsize(reference_path),
+                    "fileName": os.path.basename(reference_path).split(".")[0],
                 })
 
         client = await self._get_client()
@@ -214,7 +215,7 @@ class AsyncAuthentaClient:
         return _safe_json_async(resp)
 
     async def upload_file(self, path: str, model_type: str, **kwargs) -> Dict[str, Any]:
-        filename = os.path.basename(path)
+        filename = os.path.basename(path).split(".")[0]
         content_type = self._content_type(path)
         size = os.path.getsize(path)
 
@@ -230,25 +231,29 @@ class AsyncAuthentaClient:
             raise RuntimeError("No uploadUrl in create_media response")
 
         client = await self._get_client()
+        print(f"Uploading {filename} to S3...")
         with open(path, "rb") as f:
-            put_resp = await client.put(
-                upload_url,
-                content=f.read(),
-                headers={"Content-Type": content_type},
-                timeout=300.0,
-            )
+            file_data = f.read()
+        put_resp = await client.put(
+            upload_url,
+            data=file_data,
+            headers={"Content-Type": content_type},
+            timeout=300,
+        )
 
-        if model_type.upper() == "FI-1":
-            reference_img_url = meta["inputs"][1]["uploadUrl"] if len(meta["inputs"]) > 1 else None
+        if model_type.upper() == "FI-1" and kwargs.get("reference_path") and len(meta["inputs"]) > 1:
+            reference_img_url = meta["inputs"][1]["uploadUrl"]
+            print(f"Uploading reference image {kwargs.get('reference_path')}...")
             if reference_img_url:
                 with open(kwargs.get("reference_path"), "rb") as f:
-                    ref_resp = await client.put(
-                        reference_img_url,
-                        content=f.read(),
-                        headers={"Content-Type": self._content_type(kwargs.get("reference_path"))},
-                        timeout=300.0,
-                    )
-                    ref_resp.raise_for_status()
+                    ref_file_data = f.read()
+                ref_res = await client.put(
+                    reference_img_url,
+                    data=ref_file_data,
+                    headers={"Content-Type": self._content_type(kwargs.get("reference_path"))},
+                    timeout=300,
+                )
+                ref_res.raise_for_status()
 
         put_resp.raise_for_status()
         return meta
@@ -264,7 +269,7 @@ class AsyncAuthentaClient:
     async def wait_for_media(
         self,
         jobid: str,
-        interval: float = 5.0,
+        interval: float = 10.0,
         timeout: float = 600.0,
     ) -> Dict[str, Any]:
         """
@@ -319,15 +324,19 @@ class AsyncAuthentaClient:
         if faceSimilarityCheck and not reference_path:
             raise ValueError("reference_path must be provided if faceSimilarityCheck is True")
 
-        fi_params = {
-            "reference_path": reference_path,
-            "faceswapCheck": faceswapCheck,
-            "livenessCheck": livenessCheck,
-            "faceSimilarityCheck": faceSimilarityCheck,
-        }
+        if model_type.upper() == "FI-1":
+            fi_params = {
+                "reference_path": reference_path,
+                "faceswapCheck": faceswapCheck,
+                "livenessCheck": livenessCheck,
+                "faceSimilarityCheck": faceSimilarityCheck,
+            }
+        else:
+            fi_params = {}
 
         meta = await self.upload_file(original_path, model_type=model_type, **fi_params)
         resp = await self.finalize_media(meta["job"]["id"])
+        print(f"Finalized media with jobid {meta['job']['id']}, response: {resp}")
         if not resp:
             raise RuntimeError("Failed to finalize media after upload")
 
@@ -337,7 +346,8 @@ class AsyncAuthentaClient:
         jobid = meta["job"]["id"]
         if not jobid:
             raise RuntimeError("No 'jobid' in upload response")
-        return await self.wait_for_media(jobid, interval=interval, timeout=timeout)
+        media = await self.wait_for_media(jobid, interval=interval, timeout=timeout)
+        return media
 
     def get_result(self, media: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -350,13 +360,18 @@ class AsyncAuthentaClient:
         Returns:
             Parsed detection result dict.
         """
-        result_url = media["artifacts"][-1]["downloadUrl"]
+        for artifact in media["artifacts"]:
+            if artifact["kind"] == "result":
+                result_url = artifact["downloadUrl"]
+                break
+        else:
+            raise ValueError("media dict has no 'resultURL'. Ensure processing is complete (status=PROCESSED).")
         if not result_url:
-            raise ValueError("media dict has no downloadUrl. Ensure processing is complete.")
+            raise ValueError("media dict has no 'resultURL'. Ensure processing is complete (status=PROCESSED).")
         resp = httpx.get(result_url, timeout=30)
-        if not resp.is_success:
-            raise RuntimeError(f"Failed to fetch result: HTTP {resp.status_code}")
-        return resp.json()
+        if not resp.status_code == 200:
+            raise RuntimeError(f"Failed to fetch resultURL: HTTP {resp.status_code}")
+        return _safe_json_async(resp)
 
     async def extract_face_vector(
         self,

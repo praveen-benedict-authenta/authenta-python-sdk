@@ -102,7 +102,7 @@ class AuthentaClient:
         Create new Authenta client.
 
         Args:
-            base_url: Authenta API base URL, e.g. "https://platform-prod.authenta.ai".
+            base_url: Authenta API base URL, e.g. "https://platform/.authenta.ai".
             api_key: Your Authenta API key.
         """
         self.base_url = base_url.rstrip("/")
@@ -174,16 +174,16 @@ class AuthentaClient:
         """
         url = f"{self.base_url}/api/v1/jobs"
 
-        inputs = {
+        inputs = [{
             "slotName": "original",
             "contentType": content_type,
             "fileName": name,
             "sizeBytes": size,
-        }
+        }]
 
         payload = {
             "taskTypeId": str(self.get_task_id(model_type)),
-            "inputs": [inputs],
+            "inputs": inputs,
         }
 
         if model_type.upper() == "FI-1":
@@ -192,21 +192,19 @@ class AuthentaClient:
                 "isLivenessCheck": kwargs.get("livenessCheck"),
                 "isSimilarityCheck": kwargs.get("faceSimilarityCheck"),
             }
-            payload.update({
-                "parameters": {i: j for i, j in fi_params.items()}
-            })
+            payload["parameters"] = {k: v for k, v in fi_params.items() if v is not None}
+
             if kwargs.get("reference_path"):
                 print(f"Adding reference image {kwargs.get('reference_path')}...")
-                payload[inputs].update({
+                reference_path = kwargs.get("reference_path")
+                payload["inputs"].append({
                     "slotName": "reference",
-                    "contentType": self._content_type(kwargs.get("reference_path")),
-                    "sizeBytes": os.path.getsize(kwargs.get("reference_path")),
-                    "fileName": os.path.basename(kwargs.get("reference_path")).split(".")[0],
+                    "contentType": self._content_type(reference_path),
+                    "sizeBytes": os.path.getsize(reference_path),
+                    "fileName": os.path.basename(reference_path).split(".")[0],
                 })
 
-        print(f"Creating media record function")
         resp = requests.post(url, json=payload, headers=self._headers(), timeout=30)
-        print(f"Create media response: {resp.status_code} {resp.text[:200]}")
         if not resp.ok:
             _raise_for_authenta_error(resp)
         return _safe_json(resp)
@@ -226,6 +224,13 @@ class AuthentaClient:
         if not resp.ok:
             _raise_for_authenta_error(resp)
         return _safe_json(resp)
+    
+    def finalize_media(self, jobid: str) -> None:
+        url = f"{self.base_url}/api/v1/jobs/{jobid}/finalize"
+        resp = requests.post(url, headers=self._headers(), timeout=30)
+        if not resp.ok:
+            _raise_for_authenta_error(resp)
+        return resp.status_code == 200
 
     def upload_file(self, path: str, model_type: str, **kwargs) -> Dict[str, Any]:
         """
@@ -265,7 +270,7 @@ class AuthentaClient:
                 timeout=300,
             )
 
-        if model_type.upper() == "FI-1":
+        if model_type.upper() == "FI-1" and kwargs.get("reference_path") and len(meta["inputs"]) > 1:
             reference_img_url = meta["inputs"][1]["uploadUrl"]
             print(f"Uploading reference image {kwargs.get('reference_path')}...")
             if reference_img_url:
@@ -278,16 +283,14 @@ class AuthentaClient:
                     )
                     ref_res.raise_for_status()
 
+        finalize_media = self.finalize_media(meta["job"]["id"])
+
+        if not finalize_media:
+            raise RuntimeError("Failed to finalize media after upload")
         put_resp.raise_for_status()
         return meta
 
 
-    def finalize_media(self, jobid: str) -> None:
-        url = f"{self.base_url}/api/v1/jobs/{jobid}/finalize"
-        resp = requests.post(url, headers=self._headers(), timeout=30)
-        if not resp.ok:
-            _raise_for_authenta_error(resp)
-        return resp.status_code == 200
 
     def wait_for_media(
         self,
@@ -357,13 +360,7 @@ class AuthentaClient:
             }
         else:
             fi_params = {}
-        print(f"Uploading {original_path} for model {model_type}...")
         meta = self.upload_file(original_path, model_type=model_type, **fi_params)
-        print(f"Upload successful, waiting for processing...")
-        resp = self.finalize_media(meta["job"]["id"])
-        print(f"Finalize response: {resp}")
-        if not resp:
-            raise RuntimeError("Failed to finalize media after upload")
         
         if not auto_polling:
             return meta
@@ -371,7 +368,6 @@ class AuthentaClient:
         if not jobid:
             raise RuntimeError("No 'jobid' in upload response")
         media = self.wait_for_media(jobid, interval=interval, timeout=timeout)
-        print(f"Media processing completed with status {media}")
         
         return media
 
@@ -394,14 +390,16 @@ class AuthentaClient:
             ValueError: If the media dict has no resultURL.
             RuntimeError: If the resultURL fetch fails.
         """
-        result_url = media["artifacts"][-1]["downloadUrl"]
-        print(result_url)
+        for artifact in media["artifacts"]:
+            if artifact["kind"] == "result":
+                result_url = artifact["downloadUrl"]
+                break
         if not result_url:
             raise ValueError("media dict has no 'resultURL'. Ensure processing is complete (status=PROCESSED).")
         resp = requests.get(result_url, timeout=30)
         if not resp.ok:
             raise RuntimeError(f"Failed to fetch resultURL: HTTP {resp.status_code}")
-        return resp.json()
+        return _safe_json(resp)
 
 
     def extract_face_vector(
