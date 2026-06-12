@@ -126,9 +126,14 @@ results = await asyncio.gather(
 | Model | Modality | Capability |
 | :-- | :-- | :-- |
 | `AC-1` | Image | Detects AI-generated or manipulated images (Midjourney, Stable Diffusion, Photoshop, etc.) |
+| `AF-1` | Audio | Detects AI-generated or synthetically cloned audio |
+| `VF-1` | Video | Detects AI-generated video content |
 | `DF-1` | Video | Detects deepfake videos — face swaps, reenactments, and facial manipulations |
+| `FD-1` | Image | Detects forged or manipulated regions in images |
+| `FL-1` | Image / Video | Face liveness detection — identifies real faces vs. presentation attacks |
 | `FI-1` | Image / Video | Face Intelligence — liveness detection, face swap detection, face similarity comparison |
 | `FE-1` | Image | Extracts 512D face embedding for recognition and matching |
+| `DI-1` | Image / PDF | Detects forged or tampered content in documents |
 
 ---
 
