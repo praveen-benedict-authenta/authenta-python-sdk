@@ -133,7 +133,7 @@ results = await asyncio.gather(
 | `FL-1` | Image / Video | Face liveness detection — identifies real faces vs. presentation attacks |
 | `FI-1` | Image / Video | Face Intelligence — liveness detection, face swap detection, face similarity comparison |
 | `FE-1` | Image | Extracts 512D face embedding for recognition and matching |
-| `DI-1` | Image / PDF | Detects forged or tampered content in documents |
+| `DI-1` | Image | Detects forged or tampered content in documents |
 
 ---
 
@@ -565,7 +565,51 @@ asyncio.run(extract_embedding())
 ```
 
 
-### 4.5 Media Management
+### 4.5 DI-1 — Document Forgery Detection
+
+Detect whether a document image has been forged or contains tampered content (altered text, stamps, signatures, etc.).
+
+#### Synchronous
+
+```python
+from authenta import AuthentaClient
+
+client = AuthentaClient(
+    base_url="https://platform.authenta.ai",
+    api_key="api_xxxxxxxx...",
+)
+
+media = client.process("samples/bank_statement.png", model_type="DI-1")
+result = client.get_result(media)
+
+print(f"Job ID     : {media['id']}")
+print(f"Status     : {media['status']}")
+print(f"Is Fake    : {result['isFake']}")
+print(f"Is Tampered: {result['isTampered']}")
+```
+
+#### Asynchronous
+
+```python
+import asyncio
+from authenta.async_authenta_client import AsyncAuthentaClient
+
+async def detect_document():
+    async with AsyncAuthentaClient(
+        base_url="https://platform.authenta.ai",
+        api_key="api_xxxxxxxx...",
+    ) as client:
+        media = await client.process("samples/bank_statement.png", model_type="DI-1")
+        result = client.get_result(media)
+        print(f"Is Fake    : {result['isFake']}")
+        print(f"Is Tampered: {result['isTampered']}")
+
+asyncio.run(detect_document())
+```
+
+---
+
+### 4.6 Media Management
 
 #### Get Job
 
