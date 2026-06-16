@@ -131,20 +131,15 @@
 
 client = AuthentaClient(
     base_url="https://platform.authenta.ai",
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
+    api_key="your_api_key",
 )</code></pre>
   </div>
 
   <div class="fragment" style="margin-top:.9em">
     <div style="display:flex;gap:1.2em;justify-content:center;flex-wrap:wrap">
       <div style="background:#f0faf4;border:1.5px solid #a8dfc0;border-radius:10px;padding:.6em 1.1em;font-size:.72em;color:#1e7a44;max-width:200px;text-align:center">
-        <strong>client_id</strong><br/>
+        <strong>api_key</strong><br/>
         <span style="color:#555">Provided in your dashboard</span>
-      </div>
-      <div style="background:#f0faf4;border:1.5px solid #a8dfc0;border-radius:10px;padding:.6em 1.1em;font-size:.72em;color:#1e7a44;max-width:200px;text-align:center">
-        <strong>client_secret</strong><br/>
-        <span style="color:#555">Keep private — never expose in client code</span>
       </div>
       <div style="background:#eef4ff;border:1.5px solid #aac4f5;border-radius:10px;padding:.6em 1.1em;font-size:.72em;color:#1a4fa0;max-width:200px;text-align:center">
         <strong>One client, all services</strong><br/>
@@ -169,7 +164,7 @@ client = AuthentaClient(
     <p style="margin-top:1em;font-size:.8em">
       <span class="badge image">Image</span>
       <span class="badge video" style="margin-left:.4em">Video</span>
-      &nbsp;&nbsp;→&nbsp;&nbsp;<code>isLiveness: true / false</code>
+      &nbsp;&nbsp;→&nbsp;&nbsp;<code>isSpoof: true / false</code>
     </p>
   </section>
 
@@ -183,8 +178,8 @@ client = AuthentaClient(
     </div>
     <div class="code-wrap fragment">
       <div class="code-label">API call</div>
-      <pre><code class="language-python">media = client.face_intelligence(
-    path="face_live_video/real/3.mp4",
+      <pre><code class="language-python">media = client.process(
+    original_path="face_live_video/real/3.mp4",
     model_type="FI-1",
     livenessCheck=True,
 )</code></pre>
@@ -206,8 +201,8 @@ client = AuthentaClient(
     </div>
     <div class="code-wrap fragment">
       <div class="code-label">API call</div>
-      <pre><code class="language-python">media = client.face_intelligence(
-    path="face_live_video/fake/4.mp4",
+      <pre><code class="language-python">media = client.process(
+    original_path="face_live_video/fake/4.mp4",
     model_type="FI-1",
     livenessCheck=True,
 )</code></pre>
@@ -227,8 +222,8 @@ client = AuthentaClient(
     </div>
     <div class="code-wrap fragment">
       <div class="code-label">API call</div>
-      <pre><code class="language-python">media = client.face_intelligence(
-    path="face_live_images/real/1.jpg",
+      <pre><code class="language-python">media = client.process(
+    original_path="face_live_images/real/1.jpg",
     model_type="FI-1",
     livenessCheck=True,
 )</code></pre>
@@ -256,6 +251,7 @@ client = AuthentaClient(
     <p style="margin-top:1em;font-size:.8em">
       <span class="badge video">Video only</span>
       &nbsp;&nbsp;→&nbsp;&nbsp;<code>isDeepFake: true / false</code>
+      &nbsp;&nbsp;→&nbsp;&nbsp;<code>DeepFakeScore: 0–100</code>
     </p>
   </section>
 
@@ -269,8 +265,8 @@ client = AuthentaClient(
     </div>
     <div class="code-wrap fragment">
       <div class="code-label">API call</div>
-      <pre><code class="language-python">media = client.face_intelligence(
-    path="faceswap/fake/1.mp4",
+      <pre><code class="language-python">media = client.process(
+    original_path="faceswap/fake/1.mp4",
     model_type="FI-1",
     faceswapCheck=True,
 )</code></pre>
@@ -292,8 +288,8 @@ client = AuthentaClient(
     </div>
     <div class="code-wrap fragment">
       <div class="code-label">API call</div>
-      <pre><code class="language-python">media = client.face_intelligence(
-    path="faceswap/real/1.mp4",
+      <pre><code class="language-python">media = client.process(
+    original_path="faceswap/real/1.mp4",
     model_type="FI-1",
     faceswapCheck=True,
 )</code></pre>
@@ -320,7 +316,8 @@ client = AuthentaClient(
     </ul>
     <p style="margin-top:1em;font-size:.8em">
       <span class="badge image">Image only</span>
-      &nbsp;&nbsp;→&nbsp;&nbsp;<code>isSimilar</code> &amp; <code>similarityScore</code> (0–100)
+      &nbsp;&nbsp;→&nbsp;&nbsp;<code>isSimilar: true / false</code>
+      &nbsp;&nbsp;→&nbsp;&nbsp;<code>similarityScore: 0–100</code>
     </p>
   </section>
 
@@ -334,9 +331,9 @@ client = AuthentaClient(
     </div>
     <div class="code-wrap fragment">
       <div class="code-label">API call</div>
-      <pre><code class="language-python">media = client.face_intelligence(
-    path="face_similiar/person_1/A.jpeg",
-    reference_img_path="face_similiar/person_1/B.jpeg",
+      <pre><code class="language-python">media = client.process(
+    original_path="face_similiar/person_1/A.jpeg",
+    reference_path="face_similiar/person_1/B.jpeg",
     model_type="FI-1",
     faceSimilarityCheck=True,
 )</code></pre>
@@ -372,9 +369,9 @@ client = AuthentaClient(
     </div>
     <div class="code-wrap fragment">
       <div class="code-label">API call</div>
-      <pre><code class="language-python">media = client.face_intelligence(
-    path="face_similiar/person_1/A.jpeg",
-    reference_img_path="face_similiar/person_2/A.jpeg",
+      <pre><code class="language-python">media = client.process(
+    original_path="face_similiar/person_1/A.jpeg",
+    reference_path="face_similiar/person_2/A.jpeg",
     model_type="FI-1",
     faceSimilarityCheck=True,
 )</code></pre>
@@ -411,8 +408,8 @@ client = AuthentaClient(
       <tr><th>Service</th><th>Result</th><th>Modality</th><th>Latency</th></tr>
     </thead>
     <tbody>
-      <tr><td><strong>Liveness Detection</strong></td><td><code>isLiveness</code></td><td>Image &amp; Video</td><td>&lt; 10 s</td></tr>
-      <tr><td><strong>Face Swap Detection</strong></td><td><code>isDeepFake</code></td><td>Video</td><td>&lt; 30 s</td></tr>
+      <tr><td><strong>Liveness Detection</strong></td><td><code>isSpoof</code></td><td>Image &amp; Video</td><td>&lt; 10 s</td></tr>
+      <tr><td><strong>Face Swap Detection</strong></td><td><code>isDeepFake</code>, <code>DeepFakeScore</code></td><td>Video</td><td>&lt; 30 s</td></tr>
       <tr><td><strong>Face Similarity</strong></td><td><code>isSimilar</code>, <code>similarityScore</code></td><td>Image</td><td>&lt; 10 s</td></tr>
     </tbody>
   </table>

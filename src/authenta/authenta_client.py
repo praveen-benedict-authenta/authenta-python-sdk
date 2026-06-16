@@ -2,8 +2,7 @@
 example usage:
 client = AuthentaClient(
     base_url="https://platform-prod.authenta.ai",
-    client_id="...",
-    client_secret="...",
+    api_key="authenta_api_key_from_platform",
 )
 """
 
@@ -145,6 +144,10 @@ class AuthentaClient:
             "DI-1": "6",
             "FL-1": "7",
             "FI-1": "8",
+            "FE-1": "9",
+            "AS-1": "10",
+            "ED-1": "11",
+            "PDF-1": "13",
 
         }
         task_id = mapping.get(model_type.upper())
@@ -185,14 +188,16 @@ class AuthentaClient:
             "taskTypeId": str(self.get_task_id(model_type)),
             "inputs": inputs,
         }
-
+        parameters = {
+            "version": "v1",
+        }
         if model_type.upper() == "FI-1":
             fi_params = {
                 "isFaceswapCheck": kwargs.get("faceswapCheck"),
                 "isLivenessCheck": kwargs.get("livenessCheck"),
                 "isSimilarityCheck": kwargs.get("faceSimilarityCheck"),
             }
-            payload["parameters"] = {k: v for k, v in fi_params.items() if v is not None}
+            parameters.update({k: v for k, v in fi_params.items() if v is not None})
 
             if kwargs.get("reference_path"):
                 print(f"Adding reference image {kwargs.get('reference_path')}...")
@@ -203,7 +208,7 @@ class AuthentaClient:
                     "sizeBytes": os.path.getsize(reference_path),
                     "fileName": os.path.basename(reference_path).split(".")[0],
                 })
-
+        payload["parameters"] = parameters
         resp = requests.post(url, json=payload, headers=self._headers(), timeout=30)
         if not resp.ok:
             _raise_for_authenta_error(resp)
@@ -436,18 +441,13 @@ class AuthentaClient:
         if not auto_polling:
             return meta
             
-        jobid = meta.get("jobid")
+        jobid = meta["job"]["id"]
         if not jobid:
             raise RuntimeError("No 'jobid' in upload response")
             
         media = self.wait_for_media(jobid, interval=interval, timeout=timeout)
         
         result = self.get_result(media)
-
-        if not isinstance(result, dict) or "embedding" not in result:
-            raise RuntimeError("Invalid FE-1 response: 'embedding' key missing")
-
-        
         
         return result
     

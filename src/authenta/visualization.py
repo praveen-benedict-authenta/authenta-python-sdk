@@ -143,48 +143,48 @@ def save_heatmap_image(
     img.save(out_path)
     return out_path
 
-def save_heatmap_video(
-    media: Dict[str, Any],
-    out_dir: str,
-    base_name: str = "heatmap",
-) -> List[str]:
-    participants = media.get("participants") or []
-    print(f"found {len(participants)} participants in media")
-    if not participants:
-        raise RuntimeError("No participants found in media for video heatmap")
+# def save_heatmap_video(
+#     media: Dict[str, Any],
+#     out_dir: str,
+#     base_name: str = "heatmap",
+# ) -> List[str]:
+#     participants = media.get("participants") or []
+#     print(f"found {len(participants)} participants in media")
+#     if not participants:
+#         raise RuntimeError("No participants found in media for video heatmap")
 
-    parent = Path(out_dir)
-    parent.mkdir(parents=True, exist_ok=True)
+#     parent = Path(out_dir)
+#     parent.mkdir(parents=True, exist_ok=True)
 
-    outputs: List[str] = []
+#     outputs: List[str] = []
 
-    for idx, p in enumerate(participants):
-        heatmap_url = p.get("heatmap")
-        print(f"participant {idx} heatmap URL: {heatmap_url}")
-        if not heatmap_url:
-            print(f"[warn] no heatmap URL for participant {idx}, skipping")
-            continue
+#     for idx, p in enumerate(participants):
+#         heatmap_url = p.get("heatmap")
+#         print(f"participant {idx} heatmap URL: {heatmap_url}")
+#         if not heatmap_url:
+#             print(f"[warn] no heatmap URL for participant {idx}, skipping")
+#             continue
 
-        print(f"downloading participant {idx}…")
-        resp = requests.get(heatmap_url, stream=True, timeout=120)
-        if resp.status_code in (403, 404):
-            print(f"[warn] participant {idx} heatmap returned {resp.status_code}, skipping")
-            continue
-        resp.raise_for_status()
+#         print(f"downloading participant {idx}…")
+#         resp = requests.get(heatmap_url, stream=True, timeout=120)
+#         if resp.status_code in (403, 404):
+#             print(f"[warn] participant {idx} heatmap returned {resp.status_code}, skipping")
+#             continue
+#         resp.raise_for_status()
 
-        content_type = resp.headers.get("Content-Type", "")
-        ext = mimetypes.guess_extension(content_type.split(";")[0]) or ".mp4"
+#         content_type = resp.headers.get("Content-Type", "")
+#         ext = mimetypes.guess_extension(content_type.split(";")[0]) or ".mp4"
 
-        dest = parent / f"{base_name}_p{idx}{ext}"
-        with open(dest, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
+#         dest = parent / f"{base_name}_p{idx}{ext}"
+#         with open(dest, "wb") as f:
+#             for chunk in resp.iter_content(chunk_size=8192):
+#                 if chunk:
+#                     f.write(chunk)
 
-        outputs.append(str(dest))
-        print(f"saved {dest}")
+#         outputs.append(str(dest))
+#         print(f"saved {dest}")
 
-    return outputs
+#     return outputs
 
 def save_heatmap(
     media: Dict[str, Any],
@@ -195,12 +195,14 @@ def save_heatmap(
     based on model_type (if provided) or media["type"].
     Returns the output path.
     """
+    save_path = None
     for artifact in media["artifacts"]:
+        save_path = str(out_path+"/"+"heatmap_"+artifact["id"]+".png")
         if artifact["kind"] == "heatmap" and artifact["contentType"] == "image/png":
-            save_heatmap_image(artifact["downloadUrl"], out_path+"/"+artifact["id"]+".png")
-        if artifact["kind"] == "heatmap" and artifact["contentType"] in ("video/mp4", "video/webm"):
-            save_heatmap_video(artifact["downloadUrl"], out_path)
-    return out_path
+            save_heatmap_image(artifact["downloadUrl"], save_path)
+        # if artifact["kind"] == "heatmap" and artifact["contentType"] in ("video/mp4", "video/webm"):
+        #     save_heatmap_video(artifact["downloadUrl"], out_path)
+    return save_path
 
 
 
@@ -385,14 +387,17 @@ def authenta_to_sequence_dict(
                     detail_resp = requests.get(result_url, timeout=30)
                     detail_resp.raise_for_status()
                     detail = detail_resp.json()
+                    print(detail)
                     
                     # DF-1: boundingBoxes[participant_id][boundingBox][frame] = bbox
-                    bbox_detail = detail.get("boundingBoxes", {})
+                    bbox_detail = detail.get("identityDetails", {})
+                    print(bbox_detail)
                     if bbox_detail:
                         participant_id = "0"  # first participant
                         if participant_id in bbox_detail:
                             bbox_dict = bbox_detail[participant_id].get("boundingBox", {})
-                            
+                            cls = bbox_detail[participant_id].get("class", default_class)
+                            conf = bbox_detail[participant_id].get("confidence", default_confidence)
                             if bbox_dict:
                                 print(f"[debug] Found {len(bbox_dict)} frames from DF-1 artifact")
                                 for frame_str, bbox in bbox_dict.items():
@@ -400,8 +405,8 @@ def authenta_to_sequence_dict(
                                         frame_idx = int(frame_str)
                                         item = {
                                             "data": bbox,
-                                            "class": default_class,
-                                            "confidence": default_confidence,
+                                            "class": cls,
+                                            "confidence": conf,
                                         }
                                         sequence_dict.setdefault(frame_idx, []).append(item)
                                     except (ValueError, TypeError) as e:
@@ -499,11 +504,11 @@ def save_video_artifacts(
 
     # 1) Heatmap videos per participant
     heatmap_base = f"{base_name}_heatmap"
-    heatmap_paths = save_heatmap_video(
-        media=media,
-        out_dir=str(out_dir_path),
-        base_name=heatmap_base,
-    )
+    # heatmap_paths = save_heatmap_video(
+    #     media=media,
+    #     out_dir=str(out_dir_path),
+    #     base_name=heatmap_base,
+    # )
 
     # 2) Bounding-box annotated video
     bbox_path = str(out_dir_path / f"{base_name}_bbox.mp4")
@@ -514,6 +519,6 @@ def save_video_artifacts(
     )
 
     return {
-        "heatmap": heatmap_paths,
+        # "heatmap": heatmap_paths,
         "bbox_video": bbox_path,
     }

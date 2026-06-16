@@ -155,6 +155,10 @@ class AsyncAuthentaClient:
             "DI-1": "6",
             "FL-1": "7",
             "FI-1": "8",
+            "FE-1": "9",
+            "AS-1": "10",
+            "ED-1": "11",
+            "PDF-1": "13",
         }
         task_id = mapping.get(model_type.upper())
         if not task_id:
@@ -181,14 +185,16 @@ class AsyncAuthentaClient:
             "taskTypeId": str(self.get_task_id(model_type)),
             "inputs": [inputs],
         }
-
+        parameters = {
+            "version": "v1",
+        }
         if model_type.upper() == "FI-1":
             fi_params = {
                 "isFaceswapCheck": kwargs.get("faceswapCheck"),
                 "isLivenessCheck": kwargs.get("livenessCheck"),
                 "isSimilarityCheck": kwargs.get("faceSimilarityCheck"),
             }
-            payload["parameters"] = {k: v for k, v in fi_params.items() if v is not None}
+            parameters.update({k: v for k, v in fi_params.items() if v is not None})
 
             if kwargs.get("reference_path"):
                 print(f"Adding reference image {kwargs.get('reference_path')}...")
@@ -199,7 +205,7 @@ class AsyncAuthentaClient:
                     "sizeBytes": os.path.getsize(reference_path),
                     "fileName": os.path.basename(reference_path).split(".")[0],
                 })
-
+        payload["parameters"] = parameters
         client = await self._get_client()
         resp = await client.post(url, json=payload, headers=self._headers())
         if not resp.is_success:
@@ -256,6 +262,10 @@ class AsyncAuthentaClient:
                 ref_res.raise_for_status()
 
         put_resp.raise_for_status()
+        finalize_resp = await self.finalize_media(meta["job"]["id"])
+        print(f"Finalized media with jobid {meta['job']['id']}, response: {finalize_resp}")
+        if not finalize_resp:
+            raise RuntimeError("Failed to finalize media after upload")
         return meta
 
     async def finalize_media(self, jobid: str) -> bool:
@@ -335,10 +345,6 @@ class AsyncAuthentaClient:
             fi_params = {}
 
         meta = await self.upload_file(original_path, model_type=model_type, **fi_params)
-        resp = await self.finalize_media(meta["job"]["id"])
-        print(f"Finalized media with jobid {meta['job']['id']}, response: {resp}")
-        if not resp:
-            raise RuntimeError("Failed to finalize media after upload")
 
         if not auto_polling:
             return meta
@@ -410,12 +416,7 @@ class AsyncAuthentaClient:
 
         result = self.get_result(media)
 
-        if not isinstance(result, dict) or "embedding" not in result:
-            raise RuntimeError("Invalid FE-1 response: 'embedding' key missing")
-
-        media["result"] = result
-
-        return media
+        return result
 
     async def delete_media(self, jobid: str) -> None:
         """DELETE /api/v1/jobs/{jobid}: delete a media record."""

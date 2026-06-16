@@ -149,10 +149,19 @@ client = AuthentaClient(
 )
 
 # Detect AI-generated image (blocks until result is ready)
-media = client.process("photo.jpg", model_type="AC-1")
+media = client.process(original_path="photo.jpg", model_type="AC-1")
+result = client.get_result(media)
 print(f"Status : {media['status']}")
-print(f"Is Fake: {media.get('fake')}")
+print(f"Result : {result}")
 ```
+
+> **See also:** [examples/](examples/) directory contains complete Jupyter notebooks for every service:
+> - [AuthentaSDK_Examples.ipynb](examples/AuthentaSDK_Examples.ipynb) — Full SDK walkthrough
+> - [AC1_Image_Detection.ipynb](examples/AC1_Image_Detection.ipynb) — Image detection
+> - [DF1_Deepfake_Video_Detection.ipynb](examples/DF1_Deepfake_Video_Detection.ipynb) — Video deepfake detection
+> - [FI1_Face_Intelligence.ipynb](examples/FI1_Face_Intelligence.ipynb) — Face intelligence services
+> - [FE1_face_extraction.ipynb](examples/FE1_face_extraction.ipynb) — Face embedding extraction
+> - [DI1_Client_demo.ipynb](examples/DI1_Client_demo.ipynb) — Document intelligence
 
 ---
 
@@ -173,13 +182,11 @@ client = AuthentaClient(
 )
 
 # One-call: upload + wait for result
-media = client.process("samples/photo.jpg", model_type="AC-1")
+media = client.process(original_path="samples/photo.jpg", model_type="AC-1")
+result = client.get_result(media)
 
-print(f"Job ID   : {media['id']}")
-print(f"Status   : {media['status']}")
-print(f"Is Fake  : {media.get('fake')}")
-print(f"Result   : {media.get('resultURL')}")
-print(f"Heatmap  : {media.get('heatmapURL')}")
+print(f"Status : {media['status']}")
+print(f"Result : {result}")
 ```
 
 **Two-step (upload now, poll later)**
@@ -187,15 +194,18 @@ print(f"Heatmap  : {media.get('heatmapURL')}")
 ```python
 # Step 1 — upload
 upload_meta = client.upload_file("samples/photo.jpg", model_type="AC-1")
-job_id = upload_meta["job"]["id"]
-print(f"Uploaded. Job ID: {job_id}")
+jobid = upload_meta["job"]["id"]
+print(f"Uploaded. Job ID: {jobid}")
 
 # ... do other work ...
 
 # Step 2 — wait for result
-media = client.wait_for_job(job_id)
+media = client.wait_for_media(jobid)
 print(f"Status : {media['status']}")
-print(f"Is Fake: {media.get('fake')}")
+
+# Step 3 — get detection result
+result = client.get_result(media)
+print(f"Result: {result}")
 ```
 
 #### Asynchronous
@@ -210,9 +220,12 @@ async def detect_image():
         api_key="api_xxxxxxxx...",
     ) as client:
         # One-call: upload + wait
-        media = await client.process("samples/photo.jpg", model_type="AC-1")
+        media = await client.process(original_path="samples/photo.jpg", model_type="AC-1")
         print(f"Status : {media['status']}")
-        print(f"Is Fake: {media.get('fake')}")
+        
+        # Fetch result
+        result = client.get_result(media)
+        print(f"Result: {result}")
 
 asyncio.run(detect_image())
 ```
@@ -224,12 +237,15 @@ async def detect_image_async():
     async with AsyncAuthentaClient(...) as client:
         # Step 1 — upload
         upload_meta = await client.upload_file("samples/photo.jpg", model_type="AC-1")
-        job_id = upload_meta["job"]["id"]
+        jobid = upload_meta["job"]["id"]
 
         # Step 2 — poll when ready
-        media = await client.wait_for_job(job_id)
+        media = await client.wait_for_media(jobid)
         print(f"Status : {media['status']}")
-        print(f"Is Fake: {media.get('fake')}")
+        
+        # Step 3 — fetch result
+        result = client.get_result(media)
+        print(f"Result: {result}")
 
 asyncio.run(detect_image_async())
 ```
@@ -251,12 +267,11 @@ client = AuthentaClient(
 )
 
 # One-call: upload + wait for result
-media = client.process("samples/video.mp4", model_type="DF-1")
+media = client.process(original_path="samples/video.mp4", model_type="DF-1")
+result = client.get_result(media)
 
-print(f"Job ID      : {media['id']}")
 print(f"Status      : {media['status']}")
-print(f"Is Fake     : {media.get('fake')}")
-print(f"Participants: {len(media.get('participants', []))}")
+print(f"Result      : {result}")
 ```
 
 **Two-step**
@@ -264,12 +279,15 @@ print(f"Participants: {len(media.get('participants', []))}")
 ```python
 # Step 1 — upload
 upload_meta = client.upload_file("samples/video.mp4", model_type="DF-1")
-job_id = upload_meta["job"]["id"]
+jobid = upload_meta["job"]["id"]
 
 # Step 2 — poll with custom interval/timeout
-media = client.wait_for_job(job_id, interval=10.0, timeout=900.0)
+media = client.wait_for_media(jobid, interval=10.0, timeout=900.0)
 print(f"Status : {media['status']}")
-print(f"Is Fake: {media.get('fake')}")
+
+# Step 3 — get result
+result = client.get_result(media)
+print(f"Result: {result}")
 ```
 
 #### Asynchronous
@@ -283,9 +301,11 @@ async def detect_deepfake():
         base_url="https://platform.authenta.ai",
         api_key="api_xxxxxxxx...",
     ) as client:
-        media = await client.process("samples/video.mp4", model_type="DF-1")
+        media = await client.process(original_path="samples/video.mp4", model_type="DF-1")
         print(f"Status : {media['status']}")
-        print(f"Is Fake: {media.get('fake')}")
+        
+        result = client.get_result(media)
+        print(f"Result: {result}")
 
 asyncio.run(detect_deepfake())
 ```
@@ -293,16 +313,21 @@ asyncio.run(detect_deepfake())
 **Batch processing multiple videos (async)**
 
 ```python
+import asyncio
+
 async def process_batch(video_paths: list):
     async with AsyncAuthentaClient(...) as client:
-        tasks = [client.process(p, model_type="DF-1") for p in video_paths]
+        # Submit all tasks in parallel
+        tasks = [client.process(original_path=p, model_type="DF-1") for p in video_paths]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        # Collect results
         for path, result in zip(video_paths, results):
             if isinstance(result, Exception):
                 print(f"[FAILED] {path}: {result}")
             else:
-                print(f"[OK] {path}: fake={result.get('fake')}")
+                result_data = client.get_result(result)
+                print(f"[OK] {path}: status={result.get('status')}")
 
 asyncio.run(process_batch(["video1.mp4", "video2.mp4", "video3.mp4"]))
 ```
@@ -311,15 +336,14 @@ asyncio.run(process_batch(["video1.mp4", "video2.mp4", "video3.mp4"]))
 
 ### 4.3 FI-1 — Face Intelligence
 
-Face Intelligence provides four detection capabilities. You can enable any combination of them in a single call.
+Face Intelligence (FI-1) provides multiple detection capabilities. You can enable any combination in a single call using the `process()` method with `model_type="FI-1"` and optional parameters.
 
 | Parameter | Type | Modality | Description |
 | :-- | :-- | :-- | :-- |
 | `livenessCheck` | `bool` | Image / Video | Detect whether the face is real or a presentation attack |
 | `faceswapCheck` | `bool` | **Video only** | Detect face-swap manipulation |
 | `faceSimilarityCheck` | `bool` | **Image only** | Compare face against a reference image |
-| `isSingleFace` | `bool` | Image / Video | Validate that only one face is present |
-| `reference_img_path` | `str` | Image | Required when `faceSimilarityCheck=True` |
+| `reference_path` | `str` | Image | Required when `faceSimilarityCheck=True` |
 | `auto_polling` | `bool` | — | `True` (default): block until result ready. `False`: return upload metadata immediately |
 
 #### Liveness Detection
@@ -334,18 +358,21 @@ client = AuthentaClient(
     api_key="api_xxxxxxxx...",
 )
 
-media = client.face_intelligence(
-    path="samples/face_video.mp4",
+media = client.process(
+    original_path="samples/face_video.mp4",
     model_type="FI-1",
     livenessCheck=True,
 )
 
 print(f"Job ID   : {media['id']}")
 print(f"Status   : {media['status']}")
-print(f"Liveness : {media['result']['isLiveness']}")
+
+# Fetch result when auto_polling=False or after processing
+result = client.get_result(media)
+print(f"Liveness : {result['isLiveness']}")
 ```
 
-When `auto_polling=True` (default), `face_intelligence()` automatically fetches the detection output from the API and attaches it to the returned dict under `media['result']`. The result contains:
+When `auto_polling=True` (default for `process()`), the method automatically waits for completion. The result contains:
 
 | Field | Description |
 | :-- | :-- |
@@ -358,25 +385,19 @@ When `auto_polling=True` (default), `face_intelligence()` automatically fetches 
 
 ```python
 import asyncio
-from authenta import AuthentaClient
 from authenta.async_authenta_client import AsyncAuthentaClient
-
-sync_client = AuthentaClient(
-    base_url="https://platform.authenta.ai",
-    api_key="api_xxxxxxxx...",
-)
 
 async def liveness():
     async with AsyncAuthentaClient(
         base_url="https://platform.authenta.ai",
         api_key="api_xxxxxxxx...",
-    ) as async_client:
-        media = await async_client.process_FI(
-            path="samples/face_video.mp4",
+    ) as client:
+        media = await client.process(
+            original_path="samples/face_video.mp4",
             model_type="FI-1",
             livenessCheck=True,
         )
-        result = sync_client.get_result(media)
+        result = client.get_result(media)
         print(f"Status   : {media['status']}")
         print(f"Liveness : {result['isLiveness']}")
 
@@ -390,27 +411,28 @@ asyncio.run(liveness())
 **Synchronous**
 
 ```python
-media = client.face_intelligence(
-    path="samples/face_video.mp4",
+media = client.process(
+    original_path="samples/face_video.mp4",
     model_type="FI-1",
     faceswapCheck=True,
 )
 
+result = client.get_result(media)
 print(f"Status    : {media['status']}")
-print(f"Face Swap : {media['result']['isDeepFake']}")
+print(f"Face Swap : {result['isDeepFake']}")
 ```
 
 **Asynchronous**
 
 ```python
 async def faceswap():
-    async with AsyncAuthentaClient(...) as async_client:
-        media = await async_client.process_FI(
-            path="samples/face_video.mp4",
+    async with AsyncAuthentaClient(...) as client:
+        media = await client.process(
+            original_path="samples/face_video.mp4",
             model_type="FI-1",
-            faceSwapCheck=True,
+            faceswapCheck=True,
         )
-        result = sync_client.get_result(media)
+        result = client.get_result(media)
         print(f"Status    : {media['status']}")
         print(f"Face Swap : {result['isDeepFake']}")
 
@@ -426,29 +448,31 @@ Compare two faces and determine whether they belong to the same person.
 **Synchronous**
 
 ```python
-media = client.face_intelligence(
-    path="samples/person_A.jpg",
-    reference_img_path="samples/person_B.jpg",
+media = client.process(
+    original_path="samples/person_A.jpg",
     model_type="FI-1",
     faceSimilarityCheck=True,
+    reference_path="samples/person_B.jpg",
 )
 
+result = client.get_result(media)
 print(f"Status           : {media['status']}")
-print(f"Same Person      : {media['result']['isSimilar']}")
-print(f"Similarity Score : {media['result']['similarityScore']}")
+print(f"Same Person      : {result['isSimilar']}")
+print(f"Similarity Score : {result['similarityScore']}")
 ```
 
 **Asynchronous**
 
 ```python
 async def similarity():
-    async with AsyncAuthentaClient(...) as async_client:
-        media = await async_client.process_FI(
-            path="samples/person_A.jpg",
+    async with AsyncAuthentaClient(...) as client:
+        media = await client.process(
+            original_path="samples/person_A.jpg",
             model_type="FI-1",
             faceSimilarityCheck=True,
+            reference_path="samples/person_B.jpg",
         )
-        result = sync_client.get_result(media)
+        result = client.get_result(media)
         print(f"Similar : {result['isSimilar']}")
         print(f"Score   : {result['similarityScore']}")
 
@@ -459,25 +483,25 @@ asyncio.run(similarity())
 
 #### Manual Polling with `auto_polling=False`
 
-By default, `face_intelligence()` and `process_FI()` block until processing is complete (`auto_polling=True`). Set `auto_polling=False` to return immediately after upload and poll manually — useful for web servers, background workers, or batched jobs.
+By default, `process()` blocks until processing is complete (`auto_polling=True`). Set `auto_polling=False` to return immediately after upload and poll manually — useful for web servers, background workers, or batched jobs.
 
 **Synchronous**
 
 ```python
 # Step 1 — fire upload, return immediately
-upload_meta = client.face_intelligence(
-    path="samples/face_video.mp4",
+upload_meta = client.process(
+    original_path="samples/face_video.mp4",
     model_type="FI-1",
     livenessCheck=True,
     auto_polling=False,        # do not block
 )
-job_id = upload_meta["job"]["id"]
-print(f"Upload started. Job ID: {job_id}")
+jobid = upload_meta["job"]["id"]
+print(f"Upload started. Job ID: {jobid}")
 
 # ... do other work ...
 
 # Step 2 — poll when ready
-media = client.wait_for_job(job_id, interval=5.0, timeout=600.0)
+media = client.wait_for_media(jobid, interval=5.0, timeout=600.0)
 
 # Step 3 — fetch result
 result = client.get_result(media)
@@ -489,21 +513,21 @@ print(f"Liveness : {result['isLiveness']}")
 
 ```python
 async def manual_poll():
-    async with AsyncAuthentaClient(...) as async_client:
+    async with AsyncAuthentaClient(...) as client:
         # Step 1 — upload without blocking
-        upload_meta = await async_client.process_FI(
-            path="samples/face_video.mp4",
+        upload_meta = await client.process(
+            original_path="samples/face_video.mp4",
             model_type="FI-1",
             livenessCheck=True,
             auto_polling=False,
         )
-        job_id = upload_meta["job"]["id"]
+        jobid = upload_meta["job"]["id"]
 
         # Step 2 — poll when ready
-        media = await async_client.wait_for_job(job_id)
+        media = await client.wait_for_media(jobid)
 
         # Step 3 — fetch result
-        result = sync_client.get_result(media)
+        result = client.get_result(media)
         print(f"Status   : {media['status']}")
         print(f"Liveness : {result['isLiveness']}")
 
@@ -531,7 +555,8 @@ media = client.extract_face_vector(
     auto_polling=True
 )
 
-embedding = media["result"]["embedding"]
+result = client.get_result(media)
+embedding = result.get("embedding", [])
 
 print(f"Job ID     : {media.get('id')}")
 print(f"Status     : {media['status']}")
@@ -556,7 +581,8 @@ async def extract_embedding():
             auto_polling=True,
         )
 
-        embedding = media["result"]["embedding"]
+        result = client.get_result(media)
+        embedding = result.get("embedding", [])
 
         print(f"Job ID     : {media.get('id')}")
         print(f"Status     : {media['status']}")
@@ -580,13 +606,11 @@ client = AuthentaClient(
     api_key="api_xxxxxxxx...",
 )
 
-media = client.process("samples/bank_statement.png", model_type="DI-1")
+media = client.process(original_path="samples/bank_statement.png", model_type="DI-1")
 result = client.get_result(media)
 
 print(f"Job ID     : {media['id']}")
 print(f"Status     : {media['status']}")
-print(f"Is Fake    : {result['isFake']}")
-print(f"Is Tampered: {result['isTampered']}")
 ```
 
 #### Asynchronous
@@ -600,10 +624,9 @@ async def detect_document():
         base_url="https://platform.authenta.ai",
         api_key="api_xxxxxxxx...",
     ) as client:
-        media = await client.process("samples/bank_statement.png", model_type="DI-1")
+        media = await client.process(original_path="samples/bank_statement.png", model_type="DI-1")
         result = client.get_result(media)
-        print(f"Is Fake    : {result['isFake']}")
-        print(f"Is Tampered: {result['isTampered']}")
+        print(f"Status: {media['status']}")
 
 asyncio.run(detect_document())
 ```
@@ -612,16 +635,15 @@ asyncio.run(detect_document())
 
 ### 4.6 Media Management
 
-#### Get Job
+#### Get Media
 
-Retrieve the current state of a job by its ID.
+Retrieve the current state of a media record by its ID.
 
 **Synchronous**
 
 ```python
-job = client.get_job("YOUR_JOB_ID")
-print(f"Status : {job['status']}")
-print(f"Type   : {job.get('type')}")
+media = client.get_media("YOUR_JOB_ID")
+print(f"Status : {media['status']}")
 ```
 
 **Asynchronous**
@@ -629,8 +651,8 @@ print(f"Type   : {job.get('type')}")
 ```python
 async def get():
     async with AsyncAuthentaClient(...) as client:
-        job = await client.get_job("YOUR_JOB_ID")
-        print(f"Status : {job['status']}")
+        media = await client.get_media("YOUR_JOB_ID")
+        print(f"Status : {media['status']}")
 
 asyncio.run(get())
 ```
@@ -639,18 +661,16 @@ asyncio.run(get())
 
 #### List Media
 
-Retrieve a paginated list of all media records associated with your account.
+Retrieve a list of all media records associated with your account.
 
 **Synchronous**
 
 ```python
-# All media (default page)
-all_media = client.list_jobs()
-print(f"Total records: {len(all_media.get('items', []))}")
-
-# With pagination
-page_2 = client.list_jobs(page=2, pageSize=20)
-for item in page_2.get("items", []):
+# All media (first page)
+all_media = client.list_media()
+items = all_media.get("data", [])
+print(f"Total records: {len(items)}")
+for item in items[:10]:
     print(f"  {item['id']} — {item['status']}")
 ```
 
@@ -659,8 +679,8 @@ for item in page_2.get("items", []):
 ```python
 async def list_all():
     async with AsyncAuthentaClient(...) as client:
-        all_media = await client.list_jobs(page=1, pageSize=50)
-        for item in all_media.get("items", []):
+        all_media = await client.list_media(page=1, pageSize=10)
+        for item in all_media.get("data", []):
             print(f"  {item['id']} — {item['status']}")
 
 asyncio.run(list_all())
@@ -668,14 +688,14 @@ asyncio.run(list_all())
 
 ---
 
-#### Delete Job
+#### Delete Media
 
-Permanently remove a job record and its associated data.
+Permanently remove a media record and its associated data.
 
 **Synchronous**
 
 ```python
-client.delete_job("YOUR_JOB_ID")
+client.delete_media("YOUR_JOB_ID")
 print("Deleted.")
 ```
 
@@ -684,7 +704,7 @@ print("Deleted.")
 ```python
 async def delete():
     async with AsyncAuthentaClient(...) as client:
-        await client.delete_job("YOUR_JOB_ID")
+        await client.delete_media("YOUR_JOB_ID")
         print("Deleted.")
 
 asyncio.run(delete())
@@ -694,13 +714,13 @@ asyncio.run(delete())
 
 #### Wait for Media (Manual Poll)
 
-Poll a known media ID until processing completes. Useful after `upload_file()` or `face_intelligence(auto_polling=False)`.
+Poll a known media ID until processing completes. Useful after `upload_file()` or `process(auto_polling=False)`.
 
 **Synchronous**
 
 ```python
-media = client.wait_for_job(
-    job_id="YOUR_JOB_ID",
+media = client.wait_for_media(
+    jobid="YOUR_JOB_ID",
     interval=5.0,    # seconds between polls
     timeout=600.0,   # max wait time in seconds
 )
@@ -712,8 +732,8 @@ print(f"Final status: {media['status']}")
 ```python
 async def poll():
     async with AsyncAuthentaClient(...) as client:
-        media = await client.wait_for_job(
-            job_id="YOUR_JOB_ID",
+        media = await client.wait_for_media(
+            jobid="YOUR_JOB_ID",
             interval=5.0,
             timeout=600.0,
         )
@@ -733,33 +753,32 @@ The SDK includes a `visualization` module to generate visual overlays for detect
 ```python
 from authenta.visualization import save_heatmap
 
-media = client.process("samples/photo.jpg", model_type="AC-1")
+media = client.process(original_path="samples/photo.jpg", model_type="AC-1")
 
+os.makedirs("results", exist_ok=True)
 save_heatmap(
     media=media,
-    out_path="results/heatmap.jpg",
-    model_type="AC-1",
+    out_path="results/",  # output directory
 )
 ```
 
-Downloads the `heatmapURL` and saves an RGB overlay image showing manipulated regions.
+Downloads the heatmap artifact and saves an RGB overlay image showing manipulated regions.
 
 ---
 
 ### Heatmaps — DF-1 (Videos)
 
-For DF-1, the API may return multiple participants (faces). One heatmap video is saved per participant.
+For video models, heatmap artifacts are extracted from the media response.
 
 ```python
 from authenta.visualization import save_heatmap
 
-media = client.process("samples/video.mp4", model_type="DF-1")
+media = client.process(original_path="samples/video.mp4", model_type="DF-1")
 
-# Pass a folder path; saves heatmap_p0.mp4, heatmap_p1.mp4, ...
+os.makedirs("results", exist_ok=True)
 save_heatmap(
     media=media,
-    out_path="./results",
-    model_type="DF-1",
+    out_path="results/",  # output directory
 )
 ```
 
@@ -772,16 +791,16 @@ Draw detection boxes around faces in a deepfake video and save an annotated copy
 ```python
 from authenta.visualization import save_bounding_box_video
 
-media = client.process("samples/video.mp4", model_type="DF-1")
+media = client.process(original_path="samples/video.mp4", model_type="DF-1")
 
 save_bounding_box_video(
-    media,
+    media=media,
     src_video_path="samples/video.mp4",
     out_video_path="results/annotated_video.mp4",
 )
 ```
 
-Fetches bounding box data from `resultURL` and renders labels and confidence scores onto each frame using OpenCV.
+Fetches bounding box data from the result artifact and renders boxes, labels, and confidence scores onto each frame using OpenCV.
 
 ---
 
@@ -848,43 +867,25 @@ Initializes the synchronous client.
 
 ---
 
-#### `process(path, model_type, interval=5.0, timeout=600.0) -> Dict`
+#### `process(original_path, model_type, reference_path=None, faceswapCheck=False, livenessCheck=False, faceSimilarityCheck=False, auto_polling=True, interval=5.0, timeout=600.0) -> Dict`
 
 High-level wrapper: upload + poll until complete.
 
 | Parameter | Type | Default | Description |
 | :-- | :-- | :-- | :-- |
-| `path` | `str` | required | Local path to the media file |
-| `model_type` | `str` | required | `"AC-1"` or `"DF-1"` |
+| `original_path` | `str` | required | Local path to the media file |
+| `model_type` | `str` | required | Model type (e.g., `"AC-1"`, `"DF-1"`, `"FI-1"`, `"FE-1"`, `"DI-1"`) |
+| `reference_path` | `str` | `None` | Path to reference image for FI-1 face similarity check |
+| `faceswapCheck` | `bool` | `False` | Enable face swap detection (FI-1 video only) |
+| `livenessCheck` | `bool` | `False` | Enable liveness detection (FI-1) |
+| `faceSimilarityCheck` | `bool` | `False` | Enable face similarity check (FI-1 image only) |
+| `auto_polling` | `bool` | `True` | `True`: block until done. `False`: return upload metadata immediately |
 | `interval` | `float` | `5.0` | Seconds between polls |
 | `timeout` | `float` | `600.0` | Max wait time in seconds |
 
 Returns the final processed media dict. Raises `TimeoutError` if `timeout` elapses.
 
 ---
-
-#### `face_intelligence(path, model_type, *, reference_img_path=None, isSingleFace=True, faceswapCheck=False, livenessCheck=False, faceSimilarityCheck=False, auto_polling=True, interval=5.0, timeout=600.0) -> Dict`
-
-High-level wrapper for the FI-1 Face Intelligence model.
-
-| Parameter | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
-| `path` | `str` | required | Local path to image or video |
-| `model_type` | `str` | required | Use `"FI-1"` |
-| `reference_img_path` | `str` | `None` | Required when `faceSimilarityCheck=True` |
-| `isSingleFace` | `bool` | `True` | Validate only one face is present |
-| `faceswapCheck` | `bool` | `False` | Face swap detection (video only) |
-| `livenessCheck` | `bool` | `False` | Liveness verification |
-| `faceSimilarityCheck` | `bool` | `False` | Face comparison (image only) |
-| `auto_polling` | `bool` | `True` | `True`: block until done. `False`: return upload metadata immediately |
-| `interval` | `float` | `5.0` | Seconds between polls (when `auto_polling=True`) |
-| `timeout` | `float` | `600.0` | Max wait time (when `auto_polling=True`) |
-
-Returns final media dict when `auto_polling=True`; initial upload metadata when `auto_polling=False`.
-Raises `ValueError` for invalid combinations (e.g. `faceswapCheck=True` on an image).
-
----
-
 
 #### `extract_face_vector(img_path, auto_polling=True, interval=5.0, timeout=600.0) -> Dict`
 
@@ -897,9 +898,9 @@ High-level wrapper for the FE-1 Face Embedding model.
 | `interval` | `float` | `5.0` | Seconds between polls |
 | `timeout` | `float` | `600.0` | Max wait time |
 
-Returns media dict with `result['embedding']` when `auto_polling=True`.
+Returns result dict with `embedding` key when `auto_polling=True`.
 
-
+---
 
 #### `upload_file(path, model_type, **kwargs) -> Dict`
 
@@ -908,19 +909,19 @@ Two-step file upload: POST `/api/v1/jobs` → PUT to S3 presigned URL.
 | Parameter | Type | Description |
 | :-- | :-- | :-- |
 | `path` | `str` | Local path to the file |
-| `model_type` | `str` | `"AC-1"`, `"DF-1"`, or `"FI-1"` |
+| `model_type` | `str` | Model type (e.g., `"AC-1"`, `"DF-1"`, `"FI-1"`) |
 
-Returns the initial job metadata dict (includes `job.id`, `status`, `inputs`).
+Returns the initial media metadata dict (includes `job.id`, `status`, `inputs`).
 
 ---
 
-#### `wait_for_job(job_id, interval=5.0, timeout=600.0) -> Dict`
+#### `wait_for_media(jobid, interval=5.0, timeout=600.0) -> Dict`
 
-Poll `GET /api/v1/jobs/{job_id}` until terminal status (`COMPLETED`, `PROCESSED`, `FAILED`, `ERROR`, `CANCELLED`, `CANCELED`).
+Poll `GET /api/v1/jobs/{jobid}` until terminal status (`COMPLETED`, `PROCESSED`, `FAILED`, `ERROR`).
 
 | Parameter | Type | Default | Description |
 | :-- | :-- | :-- | :-- |
-| `job_id` | `str` | required | Job ID |
+| `jobid` | `str` | required | Job ID |
 | `interval` | `float` | `5.0` | Seconds between polls |
 | `timeout` | `float` | `600.0` | Max wait time in seconds |
 
@@ -930,43 +931,39 @@ Raises `TimeoutError` if `timeout` elapses.
 
 #### `get_result(media) -> Dict`
 
-Fetch the detection output JSON from a processed media dict's `resultURL`.
+Fetch the detection result JSON from a processed media dict's artifact.
 
 | Parameter | Type | Description |
 | :-- | :-- | :-- |
-| `media` | `dict` | A job dict returned by `face_intelligence()`, `wait_for_job()`, or `get_job()` — must have `status=PROCESSED` and contain a `resultURL` key |
+| `media` | `dict` | A media dict returned by `process()`, `wait_for_media()`, or `get_media()` — must have `status=PROCESSED` and contain result artifacts |
 
 Returns the detection result dict.
 
-- For FI-1: contains `isLiveness`, `isDeepFake`, `isSimilar`, `similarityScore`
-- For FE-1: contains `embedding`
-
-Raises `ValueError` if `resultURL` is missing. 
-
-> When `auto_polling=True` (default), `face_intelligence()` calls `get_result()` automatically and attaches the result under `media['result']`. Call `get_result()` explicitly only when using `auto_polling=False` or when working with the async client.
+Raises `ValueError` if no result artifact is found.
 
 ---
 
-#### `get_job(job_id) -> Dict`
+#### `get_media(jobid) -> Dict`
 
-`GET /api/v1/jobs/{job_id}` — fetch the current state of a media record.
+`GET /api/v1/jobs/{jobid}` — fetch the current state of a media record.
 
 ---
 
-#### `list_jobs(**params) -> Dict`
+#### `list_media(**params) -> Dict`
 
 `GET /api/v1/jobs` — list all media records.
 
-| Param | Description |
-| :-- | :-- |
-| `page` | Page number (1-based) |
-| `pageSize` | Number of records per page |
+---
+
+#### `delete_media(jobid) -> None`
+
+`DELETE /api/v1/jobs/{jobid}` — permanently delete a media record.
 
 ---
 
-#### `delete_job(job_id) -> None`
+#### `finalize_media(jobid) -> bool`
 
-`DELETE /api/v1/jobs/{job_id}` — permanently delete a media record.
+`POST /api/v1/jobs/{jobid}/finalize` — finalize a media upload.
 
 ---
 
@@ -987,38 +984,19 @@ AsyncAuthentaClient(
 
 ---
 
-#### `await process(path, model_type, interval=5.0, timeout=600.0) -> Dict`
+#### `await process(original_path, model_type, reference_path=None, faceswapCheck=False, livenessCheck=False, faceSimilarityCheck=False, auto_polling=True, interval=5.0, timeout=600.0) -> Dict`
 
 Async equivalent of `AuthentaClient.process()`.
 
 ---
 
-#### `await process_FI(path, model_type, *, isSingleFace=None, faceSwapCheck=None, livenessCheck=None, faceSimilarityCheck=None, auto_polling=True, interval=5.0, timeout=600.0) -> Dict`
-
-Async equivalent of `AuthentaClient.face_intelligence()`.
-
-| Parameter | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
-| `path` | `str` | required | Local path to image or video |
-| `model_type` | `str` | required | Use `"FI-1"` |
-| `isSingleFace` | `bool` | `None` | Validate single face |
-| `faceSwapCheck` | `bool` | `None` | Face swap detection (video only) |
-| `livenessCheck` | `bool` | `None` | Liveness verification |
-| `faceSimilarityCheck` | `bool` | `None` | Face comparison (image only) |
-| `auto_polling` | `bool` | `True` | `True`: await until done. `False`: return upload metadata immediately |
-| `interval` | `float` | `5.0` | Seconds between polls |
-| `timeout` | `float` | `600.0` | Max wait time in seconds |
-
----
-
-
 #### `await extract_face_vector(img_path, auto_polling=True, interval=5.0, timeout=600.0) -> Dict`
 
 Async equivalent of face embedding extraction (FE-1).
 
-Returns media dict with `result['embedding']` when `auto_polling=True`.
+Returns result dict with `embedding` key when `auto_polling=True`.
 
-
+---
 
 #### `await upload_file(path, model_type, **kwargs) -> Dict`
 
@@ -1026,24 +1004,30 @@ Async two-step upload. Returns initial media metadata.
 
 ---
 
-#### `await wait_for_job(job_id, interval=5.0, timeout=600.0) -> Dict`
+#### `await wait_for_media(jobid, interval=5.0, timeout=600.0) -> Dict`
 
 Async poll until terminal status. Raises `TimeoutError` on timeout.
 
 ---
 
-#### `await get_job(job_id) -> Dict`
+#### `await get_media(jobid) -> Dict`
 
 Async fetch of a single media record.
 
 ---
 
-#### `await list_jobs(**params) -> Dict`
+#### `await list_media(**params) -> Dict`
 
 Async list of media records.
 
 ---
 
-#### `await delete_job(job_id) -> None`
+#### `await delete_media(jobid) -> None`
 
 Async delete of a media record.
+
+---
+
+#### `await finalize_media(jobid) -> bool`
+
+Async finalize of a media upload.
