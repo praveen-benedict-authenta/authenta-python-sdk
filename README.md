@@ -15,7 +15,8 @@ Welcome to the official documentation for the **Authenta Python SDK** — your g
    - [4.3 FI-1 — Face Intelligence](#43-fi-1--face-intelligence)
    - [4.4 FE-1 — Face Embedding](#44-fe-1--face-embedding)
    - [4.5 DI-1 — Document Forgery Detection](#45-di-1--document-forgery-detection)
-   - [4.6 Media Management](#46-media-management)
+   - [4.6 Face Indexing](#46-face-indexing)
+   - [4.7 Media Management](#47-media-management)
 5. [Visualization](#5-visualization)
 6. [Error Handling](#6-error-handling)
 7. [API Reference](#7-api-reference)
@@ -633,7 +634,89 @@ asyncio.run(detect_document())
 
 ---
 
-### 4.6 Media Management
+### 4.6 Face Indexing
+
+Index a person's photos, then find that face again later. This is separate from
+the detection models — it runs no FI-1/DF-1/AC-1 job, and uses three endpoints
+on the same host and API key:
+
+| Method | Endpoint |
+|---|---|
+| `faceEnroll(images)` | `POST /api/v1/facesim/v1/enroll` |
+| `tenants()` | `GET /api/v1/facesim/v1/subjects` |
+| `faceSearch(image, limit)` | `POST /api/v1/facesim/v1/search` |
+
+#### Enrol a face
+
+```python
+enrolled = client.faceEnroll([
+    "data_samples/face_similiar/person_1/A.jpeg",
+    "data_samples/face_similiar/person_1/B.jpeg",
+])
+
+print(enrolled["subject_id"])
+for face in enrolled["faces"]:
+    print(face["face_id"], face["status"])   # "uploaded" or "failed"
+```
+
+Accepts **1–10 images** of the same person, and only **JPEG, PNG, or WebP**.
+Every file is validated before anything is sent, so a bad path never leaves a
+half-built subject on the server.
+
+`faceEnroll` returns as soon as the photos reach S3. The embeddings are
+generated in the background, so each face comes back as `uploaded`, not
+`processed` — poll `tenants()` to see them settle. One failed upload marks only
+its own face rather than sinking the batch.
+
+#### Check indexing progress
+
+```python
+for subject in client.tenants()["subjects"]:
+    for face in subject["faces"]:
+        print(subject["subject_id"], face["name"], face["status"], face["error"])
+```
+
+| Status | Meaning |
+|---|---|
+| `pending` | Upload URL created; the object has not been acknowledged yet |
+| `uploaded` | Stored; waiting for a worker |
+| `processing` | A worker is generating the embedding |
+| `processed` | Embedding stored — the face is searchable |
+| `failed` | Upload validation or embedding failed — see `error` |
+
+Only `processed` faces are searched, so searching too early returns `count: 0`.
+
+#### Search a face
+
+```python
+matches = client.faceSearch("data_samples/face_similiar/person_1/A.jpeg", limit=10)
+
+print(matches["count"])
+for match in matches["results"]:
+    print(match["rank"], match["subject_id"], match["similarity_score"])
+```
+
+The photo is posted as `multipart/form-data` rather than Base64 in a JSON body,
+which keeps it clear of the server's 100 KiB JSON limit. `limit` is clamped to
+1–50 and defaults to 50.
+
+Search is independent of enrolment: it matches everything already indexed on the
+account, including from earlier sessions. The same subject can appear more than
+once because every enrolled face has its own embedding, and results run from
+highest similarity down.
+
+Unsupported formats are converted to JPEG when **Pillow** is installed
+(`pip install Pillow`); without it you get a clear `ValidationError` instead of
+a server-side `invalid_image`. The conversion also bakes any EXIF rotation into
+the pixels — an image left with a stale orientation tag is read sideways by face
+detection and comes back as `no_face_detected`.
+
+A full runnable script lives in
+[`examples/test_face_indexing.py`](examples/test_face_indexing.py).
+
+---
+
+### 4.7 Media Management
 
 #### Get Media
 
@@ -942,6 +1025,40 @@ Returns the detection result dict.
 Raises `ValueError` if no result artifact is found.
 
 ---
+
+#### `faceEnroll(images) -> Dict`
+
+Enrol 1–10 photos of one person: creates the subject, then uploads each image
+to its presigned S3 URL.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `images` | `list[str]` | Local paths. JPEG, PNG, or WebP only |
+
+Returns the enroll response — `subject_id`, `status`, and a `faces` array whose
+`status` is set to `uploaded` or `failed` per image. Embeddings follow out of
+band; poll `tenants()` for `processed`.
+
+Raises `ValidationError` for an empty list, more than 10 images, a missing file,
+or an unsupported image type — all checked before any request is sent.
+
+#### `tenants() -> Dict`
+
+Every subject and face on the account: `{"tenant_id", "subjects"}`, where each
+subject holds `face_id`, `name`, `status`, `embedding`, `image_url`, and `error`.
+
+#### `faceSearch(image, limit=50, timeout=120.0) -> Dict`
+
+Rank enrolled faces against a query photo, posted as `multipart/form-data`.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `image` | `str` | — | Local path to the query photo |
+| `limit` | `int` | `50` | Matches to return, clamped to 1–50 |
+| `timeout` | `float` | `120.0` | Seconds — embedding takes longer than a plain request |
+
+Returns `{"tenant_id", "count", "results"}` with results ordered from highest
+similarity down. Only faces with `status: "processed"` are searched.
 
 #### `get_media(jobid) -> Dict`
 

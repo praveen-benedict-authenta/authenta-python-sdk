@@ -21,6 +21,12 @@ from .authenta_exceptions import (
     ValidationError,
     ServerError,
 )
+from .face_auth import (
+    BASE as FACESIM_BASE,
+    MAX_SEARCH_LIMIT,
+    FaceAuth,
+    clamp_limit,
+)
 
 def _raise_for_authenta_error(resp: requests.Response) -> None:
     """
@@ -101,18 +107,23 @@ class AuthentaClient:
         Create new Authenta client.
 
         Args:
-            base_url: Authenta API base URL, e.g. "https://platform/.authenta.ai".
+            base_url: Authenta API base URL, e.g. "https://platform.authenta.ai".
             api_key: Your Authenta API key.
         """
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.auth_enabled = bool(api_key)
 
-    def _headers(self) -> Dict[str, str]:
-        """Return default headers for Authenta API calls."""
-        headers = {
-            "Content-Type": "application/json",
-        }
+    def _headers(self, content_type: Optional[str] = "application/json") -> Dict[str, str]:
+        """
+        Return default headers for Authenta API calls.
+
+        Pass ``content_type=None`` for multipart uploads — requests generates
+        the boundary itself, and setting the header by hand breaks it.
+        """
+        headers = {}
+        if content_type:
+            headers["Content-Type"] = content_type
         if self.auth_enabled:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
@@ -375,6 +386,124 @@ class AuthentaClient:
         media = self.wait_for_media(jobid, interval=interval, timeout=timeout)
         
         return media
+
+
+    # ── Face indexing ──────────────────────────────────────────────────────
+    # Three endpoints on this same host and API key. See face_auth.py.
+
+    def faceEnroll(self, images: list) -> Dict[str, Any]:
+        """
+        Enrol photos of one person: create the subject, then upload each image.
+
+        Returns as soon as S3 has the bytes. Embeddings are generated out of
+        band, so call :meth:`tenants` afterwards to watch each face reach
+        ``processed``.
+
+        Args:
+            images: Local paths to 1-10 photos of the same person. Only
+                    JPEG, PNG, and WebP are accepted.
+
+        Returns:
+            The enroll response, with each face's ``status`` updated to
+            ``uploaded`` or ``failed`` to reflect its own upload outcome.
+        """
+        face_auth = FaceAuth()
+        described_images = face_auth.EnrollFace(images)
+
+        resp = requests.post(
+            f"{self.base_url}{FACESIM_BASE}/enroll",
+            json={"images": described_images},
+            headers=self._headers(),
+            timeout=30,
+        )
+        if not resp.ok:
+            _raise_for_authenta_error(resp)
+        enrollment = _safe_json(resp)
+
+        faces = enrollment.get("faces", [])
+        if len(faces) != len(images):
+            raise RuntimeError(
+                f"Enrollment returned {len(faces)} upload URLs for {len(images)} images"
+            )
+
+        # The response preserves the order of `images`. One failed PUT marks
+        # only its own face, rather than sinking the whole batch.
+        for face, image, described in zip(faces, images, described_images):
+            upload_url = face.get("upload_url")
+            if not upload_url:
+                face["status"] = "failed"
+                continue
+
+            content_type = (face.get("headers") or {}).get(
+                "Content-Type", described["contentType"]
+            )
+            print(f"Uploading {os.path.basename(image)}...")
+            status = face_auth.putSignedUrl(upload_url, image, content_type)
+            face["status"] = "uploaded" if 200 <= status < 300 else "failed"
+
+        return enrollment
+
+    def tenants(self) -> Dict[str, Any]:
+        """
+        GET /api/v1/facesim/v1/subjects: every subject and face on the account.
+
+        Use it to follow enrolment progress — a face is searchable once its
+        status reaches ``processed``.
+        """
+        resp = requests.get(
+            f"{self.base_url}{FACESIM_BASE}/tenant",
+            headers=self._headers(),
+            timeout=30,
+        )
+        if not resp.ok:
+            _raise_for_authenta_error(resp)
+        return _safe_json(resp)
+
+    def faceSearch(
+        self,
+        image: str,
+        limit: int = MAX_SEARCH_LIMIT,
+        timeout: float = 120.0,
+    ) -> Dict[str, Any]:
+        """
+        POST /api/v1/facesim/v1/search: rank enrolled faces against a photo.
+
+        The image is posted as ``multipart/form-data`` rather than Base64 in a
+        JSON body, which keeps it clear of the server's 100 KiB JSON limit.
+
+        Search is independent of enrolment: it matches everything already
+        indexed on the account, including from earlier sessions. The same
+        subject can appear more than once because every enrolled face has its
+        own embedding.
+
+        Args:
+            image: Local path to the query photo.
+            limit: How many matches to return, clamped to 1-50.
+            timeout: Seconds to wait — embedding a face takes longer than a
+                     plain request.
+
+        Returns:
+            ``{"tenant_id", "count", "results"}`` with results ordered from
+            highest similarity down.
+        """
+        face_auth = FaceAuth()
+        path, content_type = face_auth.prepare_search_image(image)
+        capped = clamp_limit(limit)
+
+        print(f"Searching faces with {os.path.basename(path)} (limit {capped})...")
+        with open(path, "rb") as handle:
+            resp = requests.post(
+                f"{self.base_url}{FACESIM_BASE}/search",
+                # No Content-Type header here: requests sets the multipart
+                # boundary itself, and overriding it breaks the upload.
+                headers=self._headers(content_type=None),
+                files={"image": (os.path.basename(path), handle, content_type)},
+                data={"limit": str(capped)},
+                timeout=timeout,
+            )
+        if not resp.ok:
+            _raise_for_authenta_error(resp)
+        return _safe_json(resp)
 
     def get_result(self, media: Dict[str, Any]) -> Dict[str, Any]:
         """
