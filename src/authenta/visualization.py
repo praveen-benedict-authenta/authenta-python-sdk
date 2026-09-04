@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from typing import Dict, Any, List, Optional
 import os
+import re
 import mimetypes
 
 import cv2
@@ -21,6 +22,22 @@ def _ensure_dir(path: str) -> None:
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
+
+
+_BAD_ID_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def secure_check_id(artifact_id: str) -> str:
+    clean_id = _BAD_ID_CHARS.sub("_", str(artifact_id)).strip("._")
+    return clean_id or "artifact"
+
+
+def secure_check_path(out_dir: str, filename: str) -> str:
+    out_dir_real = os.path.realpath(out_dir)
+    candidate = os.path.realpath(os.path.join(out_dir_real, filename))
+    if os.path.commonpath([out_dir_real, candidate]) != out_dir_real:
+        raise ValueError(f"Refusing to save artifact outside of {out_dir!r}: {filename!r}")
+    return candidate
 
 
 # -------------------------
@@ -197,7 +214,8 @@ def save_heatmap(
     """
     save_path = None
     for artifact in media["artifacts"]:
-        save_path = str(out_path+"/"+"heatmap_"+artifact["id"]+".png")
+        safe_id = secure_check_id(artifact["id"])
+        save_path = secure_check_path(out_path, "heatmap_" + safe_id + ".png")
         if artifact["kind"] == "heatmap" and artifact["contentType"] == "image/png":
             save_heatmap_image(artifact["downloadUrl"], save_path)
         # if artifact["kind"] == "heatmap" and artifact["contentType"] in ("video/mp4", "video/webm"):
