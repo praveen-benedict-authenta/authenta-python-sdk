@@ -8,6 +8,7 @@ from .authenta_exceptions import (
     ValidationError,
     ServerError,
 )
+from .task_types import RESULT_TAGS, TASK_TYPES, TERMINAL_STATUSES
 
 __all__ = [
     "AuthentaClient",
@@ -18,4 +19,7 @@ __all__ = [
     "InsufficientCreditsError",
     "ValidationError",
     "ServerError",
+    "RESULT_TAGS",
+    "TASK_TYPES",
+    "TERMINAL_STATUSES",
 ]

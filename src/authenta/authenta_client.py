@@ -20,6 +20,15 @@ from .authenta_exceptions import (
     InsufficientCreditsError,
     ValidationError,
     ServerError,
+    error_from_response,
+)
+from .task_types import (
+    count_pdf_pages,
+    find_result_url,
+    is_terminal,
+    merge_job_result,
+    model_code,
+    resolve_task_type_id,
 )
 from .face_auth import (
     BASE as FACESIM_BASE,
@@ -32,45 +41,16 @@ def _raise_for_authenta_error(resp: requests.Response) -> None:
     """
     Map an Authenta API error response to a rich SDK exception.
 
-    Expects JSON like: {"code": "IAM001", "type": "...", "message": "..."}.
+    Expects JSON like: {"rid": "...", "name": "INVALID_API_KEY", "message": "..."}.
     Falls back to HTTP-based mapping if the body is not JSON.
     """
-    status = resp.status_code
     try:
-        data = resp.json()
+        body = resp.json()
     except ValueError:
-        if 400 <= status < 500:
-            raise ValidationError(
-                message=resp.text or "Client error",
-                status_code=status,
-            )
-        if status >= 500:
-            raise ServerError(
-                message=resp.text or "Server error",
-                status_code=status,
-            )
-        resp.raise_for_status()
-        return
-
-    code = data.get("code") or "unknown"
-    message = data.get("message") or resp.reason or "Unknown error"
-    details = data
-
-    if code == "IAM001":
-        raise AuthenticationError(message, status_code=status, details=details)
-    if code == "IAM002":
-        raise AuthorizationError(message, status_code=status, details=details)
-    if code == "AA001":
-        raise QuotaExceededError(message, status_code=status, details=details)
-    if code == "U007":
-        raise InsufficientCreditsError(message, status_code=status, details=details)
-
-    if 400 <= status < 500:
-        raise ValidationError(message, code=code, status_code=status, details=details)
-    if status >= 500:
-        raise ServerError(message, code=code, status_code=status, details=details)
-
-    raise AuthentaError(message, code=code, status_code=status, details=details)
+        body = None
+    raise error_from_response(
+        resp.status_code, body, text=resp.text, reason=resp.reason or "", headers=resp.headers
+    )
 
 
 def _safe_json(resp: requests.Response) -> Dict[str, Any]:
@@ -96,10 +76,10 @@ class AuthentaClient:
     Authenta Python SDK.
 
     Features:
-    - Builds Auth headers with x-client-id / x-client-secret.
-    - Wraps /api/media endpoints for create, get, list, delete.
-    - Implements two-step upload (POST /api/media -> PUT to S3).
-    - Process deepfake-detection.
+    - Authenticates with ``Authorization: Bearer <api_key>``.
+    - Wraps /api/v1/jobs for create, finalize, get, list, cancel, delete.
+    - Implements the upload flow (POST /api/v1/jobs -> PUT to S3 -> finalize).
+    - Face indexing via /api/v1/facesim.
     """
 
     def __init__(self, base_url: str, api_key: str):
@@ -141,30 +121,10 @@ class AuthentaClient:
 
     def get_task_id(self, model_type: str) -> str:
         """
-        Map a model_type to a task_id.
-
-        This is a placeholder implementation. In a real implementation, you might
-        fetch this mapping from the API or maintain an up-to-date hardcoded dict.
+        Map a model code (``"AC-1"``), slug (``"ai-image-detection"``) or
+        numeric task type ID to the ``taskTypeId`` the API expects.
         """
-        mapping = {
-            "AC-1": "1",
-            "AF-1": "2",
-            "VF-1": "3",
-            "DF-1": "4",
-            "FD-1": "5",
-            "DI-1": "6",
-            "FL-1": "7",
-            "FI-1": "8",
-            "FE-1": "9",
-            "AS-1": "10",
-            "ED-1": "11",
-            "PDF-1": "13",
-
-        }
-        task_id = mapping.get(model_type.upper())
-        if not task_id:
-            raise ValueError(f"Unknown model_type {model_type!r}. Valid options: {list(mapping.keys())}")
-        return task_id
+        return resolve_task_type_id(model_type)
 
     def create_media(
         self,
@@ -194,6 +154,8 @@ class AuthentaClient:
             "fileName": name,
             "sizeBytes": size,
         }]
+        if kwargs.get("page_count") is not None:
+            inputs[0]["pageCount"] = int(kwargs["page_count"])
 
         payload = {
             "taskTypeId": str(self.get_task_id(model_type)),
@@ -202,7 +164,7 @@ class AuthentaClient:
         parameters = {
             "version": "v1",
         }
-        if model_type.upper() == "FI-1":
+        if model_code(model_type) == "FI-1":
             fi_params = {
                 "isFaceswapCheck": kwargs.get("faceswapCheck"),
                 "isLivenessCheck": kwargs.get("livenessCheck"),
@@ -217,7 +179,7 @@ class AuthentaClient:
                     "slotName": "reference",
                     "contentType": self._content_type(reference_path),
                     "sizeBytes": os.path.getsize(reference_path),
-                    "fileName": os.path.basename(reference_path).split(".")[0],
+                    "fileName": os.path.basename(reference_path),
                 })
         payload["parameters"] = parameters
         resp = requests.post(url, json=payload, headers=self._headers(), timeout=30)
@@ -248,6 +210,20 @@ class AuthentaClient:
             _raise_for_authenta_error(resp)
         return resp.status_code == 200
 
+    def cancel_media(self, jobid: str) -> Dict[str, Any]:
+        """
+        POST /api/v1/jobs/{jobid}/cancel: cancel a job that has not started
+        processing (status ``initiated`` or ``queued``). Its credits are refunded.
+
+        Returns:
+            The job with ``"status": "cancelled"``.
+        """
+        url = f"{self.base_url}/api/v1/jobs/{jobid}/cancel"
+        resp = requests.post(url, headers=self._headers(), timeout=30)
+        if not resp.ok:
+            _raise_for_authenta_error(resp)
+        return _safe_json(resp)
+
     def upload_file(self, path: str, model_type: str, **kwargs) -> Dict[str, Any]:
         """
         Upload a file via the two-step Authenta media flow.
@@ -259,13 +235,17 @@ class AuthentaClient:
         Args:
             path: Local path to the media file.
             model_type: Detection model type to use, e.g. "AC-1" or "DF-1".
+            page_count: PDFs only — page count, required by PDF-1. Counted
+                        automatically when omitted and ``pypdf`` is installed.
 
         Returns:
             The JSON response from POST /api/v1/jobs (includes 'jobid', 'status', etc.).
         """
-        filename = os.path.basename(path).split(".")[0]
+        filename = os.path.basename(path)
         content_type = self._content_type(path)
         size = os.path.getsize(path)
+        if content_type == "application/pdf" and kwargs.get("page_count") is None:
+            kwargs["page_count"] = count_pdf_pages(path)
         print(f"Creating media record for {filename} (type={content_type}, size={size} bytes) with model {model_type}...")
         meta = self.create_media(
             name=filename,
@@ -286,7 +266,7 @@ class AuthentaClient:
                 timeout=300,
             )
 
-        if model_type.upper() == "FI-1" and kwargs.get("reference_path") and len(meta["inputs"]) > 1:
+        if model_code(model_type) == "FI-1" and kwargs.get("reference_path") and len(meta["inputs"]) > 1:
             reference_img_url = meta["inputs"][1]["uploadUrl"]
             print(f"Uploading reference image {kwargs.get('reference_path')}...")
             if reference_img_url:
@@ -317,14 +297,14 @@ class AuthentaClient:
         """
         Poll GET /api/v1/jobs/{jobid} until it reaches a terminal status.
 
-        Terminal statuses: PROCESSED, FAILED, ERROR.
+        Terminal statuses: COMPLETED, FAILED, CANCELLED.
         Raises TimeoutError if 'timeout' seconds elapse without a terminal state.
         """
         start = time.time()
         while True:
             media = self.get_media(jobid)
             status = (media["status"] or "").upper()
-            if status in {"COMPLETED", "PROCESSED", "FAILED", "ERROR"}:
+            if is_terminal(status):
                 return media
             if time.time() - start > timeout:
                 raise TimeoutError(
@@ -355,11 +335,14 @@ class AuthentaClient:
         auto_polling: bool = True,
         interval: float = 5.0,
         timeout: float = 600.0,
+        page_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         High-level helper:
           1) upload_file(path, model_type) -> get jobid
           2) wait_for_media(jobid)
+
+        ``page_count`` is for PDF-1 only; see :meth:`upload_file`.
         """
         if self._content_type(original_path).startswith("image/") and faceswapCheck:
             raise ValueError("faceswapCheck cannot be True for image media")
@@ -367,7 +350,7 @@ class AuthentaClient:
             raise ValueError("faceSimilarityCheck cannot be True for video media")
         if faceSimilarityCheck and not reference_path:
             raise ValueError("reference_path must be provided if faceSimilarityCheck is True")
-        if model_type.upper() == "FI-1":
+        if model_code(model_type) == "FI-1":
             fi_params = {
                 "reference_path": reference_path,
                 "faceswapCheck": faceswapCheck,
@@ -376,6 +359,8 @@ class AuthentaClient:
             }
         else:
             fi_params = {}
+        if page_count is not None:
+            fi_params["page_count"] = page_count
         meta = self.upload_file(original_path, model_type=model_type, **fi_params)
         
         if not auto_polling:
@@ -507,33 +492,29 @@ class AuthentaClient:
 
     def get_result(self, media: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Fetch the detection result JSON from the media's resultURL.
+        Fetch the detection result JSON from the media's ``result`` artifact.
 
-        The resultURL is a presigned S3 URL returned after processing.
-        It contains the actual detection output (e.g. isLiveness, isDeepFake,
-        isSimilar, similarityScore, etc.).
+        The artifact is written by the model. The job-level fields the API adds
+        on top — ``tag``, ``tagBoundaries`` and ``modelVersion`` — are merged in
+        when the artifact lacks them; values already in the artifact are never
+        changed. The same fields are also on ``media["result"]`` directly.
 
         Args:
-            media: A media dict returned by face_intelligence(), process(), or
-                   wait_for_media() — must contain a 'resultURL' key.
+            media: A media dict returned by process(), wait_for_media() or
+                   get_media() — must contain a ``result`` artifact.
 
         Returns:
-            Parsed detection result dict from resultURL.
+            Parsed detection result dict.
 
         Raises:
-            ValueError: If the media dict has no resultURL.
-            RuntimeError: If the resultURL fetch fails.
+            ValueError: If the media dict has no result artifact.
+            RuntimeError: If the result download fails.
         """
-        for artifact in media["artifacts"]:
-            if artifact["kind"] == "result":
-                result_url = artifact["downloadUrl"]
-                break
-        if not result_url:
-            raise ValueError("media dict has no 'resultURL'. Ensure processing is complete (status=PROCESSED).")
+        result_url = find_result_url(media)
         resp = requests.get(result_url, timeout=30)
         if not resp.ok:
             raise RuntimeError(f"Failed to fetch resultURL: HTTP {resp.status_code}")
-        return _safe_json(resp)
+        return merge_job_result(media, _safe_json(resp))
 
 
     def extract_face_vector(
