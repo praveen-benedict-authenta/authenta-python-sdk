@@ -9,6 +9,7 @@ Welcome to the official documentation for the **Authenta Python SDK** — your g
 1. [Getting Started](#1-getting-started)
 2. [Models & Capabilities](#2-models--capabilities)
 3. [Quick Start](#3-quick-start)
+   - [3.1 Reading Results](#31-reading-results)
 4. [Services](#4-services)
    - [4.1 AC-1 — AI-Generated Image Detection](#41-ac-1--ai-generated-image-detection)
    - [4.2 DF-1 — Deepfake Video Detection](#42-df-1--deepfake-video-detection)
@@ -17,9 +18,11 @@ Welcome to the official documentation for the **Authenta Python SDK** — your g
    - [4.5 DI-1 — Document Forgery Detection](#45-di-1--document-forgery-detection)
    - [4.6 Face Indexing](#46-face-indexing)
    - [4.7 Media Management](#47-media-management)
+   - [4.8 PDF-1 — PDF Tampering Detection](#48-pdf-1--pdf-tampering-detection)
 5. [Visualization](#5-visualization)
 6. [Error Handling](#6-error-handling)
 7. [API Reference](#7-api-reference)
+8. [Changelog](#8-changelog)
 
 ---
 
@@ -31,6 +34,14 @@ Welcome to the official documentation for the **Authenta Python SDK** — your g
 
 ```bash
 pip install authentasdk
+```
+
+Optional extras:
+
+```bash
+pip install "authentasdk[viz]"   # visualization helpers (OpenCV, Pillow)
+pip install "authentasdk[pdf]"   # count PDF pages automatically for PDF-1 (pypdf)
+pip install "authentasdk[all]"
 ```
 
 **Option B: Local Development**
@@ -90,7 +101,7 @@ The sync client blocks the calling thread while it waits for processing to compl
 ```python
 # Blocks here until the result is ready
 media = client.process("photo.jpg", model_type="AC-1")
-print(media["fake"])
+print(media["result"]["isFake"])
 ```
 
 ### Async client (`AsyncAuthentaClient`)
@@ -125,17 +136,24 @@ results = await asyncio.gather(
 
 ## 2. Models & Capabilities
 
-| Model | Modality | Capability |
-| :-- | :-- | :-- |
-| `AC-1` | Image | Detects AI-generated or manipulated images (Midjourney, Stable Diffusion, Photoshop, etc.) |
-| `AF-1` | Audio | Detects AI-generated or synthetically cloned audio |
-| `VF-1` | Video | Detects AI-generated video content |
-| `DF-1` | Video | Detects deepfake videos — face swaps, reenactments, and facial manipulations |
-| `FD-1` | Image | Detects forged or manipulated regions in images |
-| `FL-1` | Image / Video | Face liveness detection — identifies real faces vs. presentation attacks |
-| `FI-1` | Image / Video | Face Intelligence — liveness detection, face swap detection, face similarity comparison |
-| `FE-1` | Image | Extracts 512D face embedding for recognition and matching |
-| `DI-1` | Image | Detects forged or tampered content in documents |
+Pass the **model code**, the **slug**, or the numeric **task type ID** as `model_type` — all three are accepted. The IDs below are the cloud IDs; on-prem deployments can use different IDs, so prefer the code or slug, or pass your environment's numeric ID directly.
+
+| Model | Slug | ID | Modality | Capability |
+| :-- | :-- | :-- | :-- | :-- |
+| `AC-1` | `ai-image-detection` | 1 | Image | Detects AI-generated images (Midjourney, Stable Diffusion, etc.) |
+| `AF-1` | `ai-audio-detection` | 2 | Audio | Detects AI-generated or cloned audio |
+| `VF-1` | `ai-video-detection` | 3 | Video | Detects AI-generated video |
+| `DF-1` | `faceswap-detection` | 4 | Video | Face-swap detection — **deprecated**, use `ED-1` |
+| `FD-1` | `image-forgery-detection` | 5 | Image | Finds edited or tampered regions in a real image |
+| `DI-1` | `document-intelligence` | 6 | Image | Detects AI generation or tampering in a document image |
+| `FL-1` | `face-liveness-detection` | 7 | Image | Checks a selfie is a live person, not a photo, screen or mask |
+| `FI-1` | `face-intelligence` | 8 | Image / Video | Face-swap and liveness checks in one job |
+| `FE-1` | `face-embedding` | 9 | Image | Extracts a face embedding (not a detector) |
+| `AS-1` | `audio-splitter` | 10 | Audio | Separates voice from background audio (not a detector) |
+| `ED-1` | `ekyc-deepfake` | 11 | Video | eKYC deepfake detection — latest face-swap detector |
+| `PDF-1` | `pdf-tampering-detection` | 13 | PDF | Detects edits to a PDF (needs the page count — see [4.8](#48-pdf-1--pdf-tampering-detection)) |
+
+Full per-model inputs, limits and result fields: [docs.authenta.ai → Task Types](https://docs.authenta.ai/api/task-types).
 
 ---
 
@@ -153,8 +171,44 @@ client = AuthentaClient(
 media = client.process(original_path="photo.jpg", model_type="AC-1")
 result = client.get_result(media)
 print(f"Status : {media['status']}")
+print(f"Tag    : {result.get('tag')}")      # real / likely_real / likely_fake / fake
 print(f"Result : {result}")
 ```
+
+### 3.1 Reading Results
+
+Every scored detection result carries one score, `fakeConfidencePercent`, and a `tag` derived from it. Use `tag` or `fakeConfidencePercent` for decisions; never threshold on `confidencePercent`.
+
+| Field | Type | Meaning |
+| :-- | :-- | :-- |
+| `fakeConfidencePercent` | number, 0–100 | Estimate that the media is AI-generated or manipulated. Higher = more likely fake |
+| `realConfidencePercent` | number, 0–100 | `100 - fakeConfidencePercent` |
+| `confidencePercent` | number, 0–100 | Confidence in the returned verdict. Kept for compatibility |
+| `tag` | string | `real`, `likely_real`, `likely_fake` or `fake` |
+| `tagBoundaries` | object | Boundaries that produced `tag`, e.g. `{"real": 30, "likelyReal": 50, "likelyFake": 75}` |
+| `isFake` | bool | `True` when `tag` is `likely_fake` or `fake` |
+| `modelVersion` | string | Version of the model that produced the result |
+
+The same fields are on `media["result"]` (from `process()`, `wait_for_media()` or `get_media()`) and in the dict `get_result()` returns.
+
+```python
+result = media["result"]
+tag = result.get("tag")
+
+if tag in ("real", "likely_real"):
+    accept(media)
+elif tag == "likely_fake":
+    review(media)
+elif tag == "fake":
+    reject(media)
+else:  # job completed before tags existed, or a task type with no single score
+    review(media) if result.get("isFake") else accept(media)
+```
+
+- **Treat `tag`, `tagBoundaries` and `modelVersion` as optional.** Older jobs don't have them, and task types without a single score (e.g. `FI-1`, `FE-1`, `AS-1`) have no `tag`.
+- **Read boundaries from `tagBoundaries`**, don't hard-code them — they differ per task type and are stored with each job.
+- **Store `modelVersion`** with your decision; re-check your own cutoffs when it changes.
+- **Ignore fields you don't recognise** — new ones can be added at any time.
 
 > **See also:** [examples/](examples/) directory contains complete Jupyter notebooks for every service:
 > - [AuthentaSDK_Examples.ipynb](examples/AuthentaSDK_Examples.ipynb) — Full SDK walkthrough
@@ -643,7 +697,7 @@ on the same host and API key:
 | Method | Endpoint |
 |---|---|
 | `faceEnroll(images)` | `POST /api/v1/facesim/v1/enroll` |
-| `tenants()` | `GET /api/v1/facesim/v1/subjects` |
+| `tenants()` | `GET /api/v1/facesim/v1/tenant` |
 | `faceSearch(image, limit)` | `POST /api/v1/facesim/v1/search` |
 
 #### Enrol a face
@@ -749,10 +803,13 @@ Retrieve a list of all media records associated with your account.
 **Synchronous**
 
 ```python
-# All media (first page)
+# First page (default 20, newest first)
 all_media = client.list_media()
 items = all_media.get("data", [])
-print(f"Total records: {len(items)}")
+print(f"Total records: {all_media.get('total')}")
+
+# Filters: limit (1-100), offset, status, taskTypeSlug, createdAfter, createdBefore
+done = client.list_media(limit=10, status="completed", taskTypeSlug="ai-image-detection")
 for item in items[:10]:
     print(f"  {item['id']} — {item['status']}")
 ```
@@ -762,12 +819,25 @@ for item in items[:10]:
 ```python
 async def list_all():
     async with AsyncAuthentaClient(...) as client:
-        all_media = await client.list_media(page=1, pageSize=10)
+        all_media = await client.list_media(limit=10, offset=0)
         for item in all_media.get("data", []):
             print(f"  {item['id']} — {item['status']}")
 
 asyncio.run(list_all())
 ```
+
+---
+
+#### Cancel Media
+
+Cancel a job that hasn't started processing (`initiated` or `queued`); its credits are refunded. Requires an API key with the **Delete** permission.
+
+```python
+job = client.cancel_media("YOUR_JOB_ID")
+print(job["status"])  # "cancelled"
+```
+
+Async: `await client.cancel_media("YOUR_JOB_ID")`.
 
 ---
 
@@ -797,7 +867,7 @@ asyncio.run(delete())
 
 #### Wait for Media (Manual Poll)
 
-Poll a known media ID until processing completes. Useful after `upload_file()` or `process(auto_polling=False)`.
+Poll a known media ID until it reaches `completed`, `failed` or `cancelled`. Useful after `upload_file()` or `process(auto_polling=False)`.
 
 **Synchronous**
 
@@ -824,6 +894,20 @@ async def poll():
 
 asyncio.run(poll())
 ```
+
+---
+
+### 4.8 PDF-1 — PDF Tampering Detection
+
+Detect edits to a PDF. The API needs the PDF's page count: pass `page_count`, or install `pypdf` (`pip install "authentasdk[pdf]"`) and the SDK counts it for you.
+
+```python
+media = client.process("contract.pdf", model_type="PDF-1", page_count=3)
+result = client.get_result(media)
+print(result["isFake"], result.get("modelVersion"))
+```
+
+Without `page_count` and without `pypdf`, the SDK raises `ValueError` before creating the job, so no credits are spent.
 
 ---
 
@@ -889,17 +973,25 @@ Fetches bounding box data from the result artifact and renders boxes, labels, an
 
 ## 6. Error Handling
 
-All SDK methods raise typed exceptions defined in `authenta_exceptions.py`.
+All SDK methods raise typed exceptions defined in `authenta_exceptions.py`. Every API error carries:
 
-| Exception | API Code | Cause |
-| :-- | :-- | :-- |
-| `AuthenticationError` | `IAM001` | Invalid or missing credentials |
-| `AuthorizationError` | `IAM002` | Insufficient permissions |
-| `QuotaExceededError` | `AA001` | API limit reached for your plan |
-| `InsufficientCreditsError` | `U007` | Not enough credits |
-| `ValidationError` | — | Bad request / unexpected response |
-| `ServerError` | — | Server-side 5xx error |
-| `AuthentaError` | — | Base class for all SDK errors |
+- `e.code` — the API's error name, e.g. `INVALID_API_KEY` (branch on this, not on the message)
+- `e.status_code` — HTTP status
+- `e.request_id` — the API's request ID; include it when contacting support
+- `e.details` — the full error body (for `VALIDATION_ERROR`, `e.details["fields"]` says which fields are invalid)
+- `e.retry_after` — seconds to wait, when the API sends `Retry-After`
+
+| Exception | HTTP | API `name` | Cause |
+| :-- | :-- | :-- | :-- |
+| `AuthenticationError` | 401 | `UNAUTHENTICATED`, `INVALID_API_KEY` | Missing, revoked, expired or unknown API key |
+| `AuthorizationError` | 403 | `FORBIDDEN` | The key lacks the permission the endpoint needs |
+| `InsufficientCreditsError` | 402 | `INSUFFICIENT_BALANCE`, `PAYG_LIMIT_REACHED` | Not enough credits, or monthly pay-as-you-go limit reached |
+| `QuotaExceededError` | 429 | `RATE_LIMITED` | Too many requests — see `retry_after` |
+| `ValidationError` | 4xx | `VALIDATION_ERROR`, `TASK_TYPE_NOT_FOUND`, `JOB_NOT_FOUND`, ... | Bad request |
+| `ServerError` | 5xx | `INTERNAL_ERROR` | Server-side error; safe to retry with backoff |
+| `AuthentaError` | — | — | Base class for all SDK errors |
+
+> **Compatibility:** the four specific 4xx errors above are also instances of `ValidationError`, so existing `except ValidationError` handlers keep catching them as they did before 0.3.0. Put specific `except` clauses before `except ValidationError`.
 
 ```python
 from authenta import AuthentaClient
@@ -929,7 +1021,7 @@ except InsufficientCreditsError:
 except TimeoutError as e:
     print(f"Processing timed out: {e}")
 except AuthentaError as e:
-    print(f"Authenta error [{e.code}]: {e.message}")
+    print(f"Authenta error [{e.code}]: {e.message} (request {e.request_id})")
 ```
 
 The same exception classes are raised by `AsyncAuthentaClient`.
@@ -950,14 +1042,14 @@ Initializes the synchronous client.
 
 ---
 
-#### `process(original_path, model_type, reference_path=None, faceswapCheck=False, livenessCheck=False, faceSimilarityCheck=False, auto_polling=True, interval=5.0, timeout=600.0) -> Dict`
+#### `process(original_path, model_type, reference_path=None, faceswapCheck=False, livenessCheck=False, faceSimilarityCheck=False, auto_polling=True, interval=5.0, timeout=600.0, page_count=None) -> Dict`
 
 High-level wrapper: upload + poll until complete.
 
 | Parameter | Type | Default | Description |
 | :-- | :-- | :-- | :-- |
 | `original_path` | `str` | required | Local path to the media file |
-| `model_type` | `str` | required | Model type (e.g., `"AC-1"`, `"DF-1"`, `"FI-1"`, `"FE-1"`, `"DI-1"`) |
+| `model_type` | `str` | required | Model code (`"AC-1"`), slug (`"ai-image-detection"`) or numeric task type ID — see [Models](#2-models--capabilities) |
 | `reference_path` | `str` | `None` | Path to reference image for FI-1 face similarity check |
 | `faceswapCheck` | `bool` | `False` | Enable face swap detection (FI-1 video only) |
 | `livenessCheck` | `bool` | `False` | Enable liveness detection (FI-1) |
@@ -965,8 +1057,9 @@ High-level wrapper: upload + poll until complete.
 | `auto_polling` | `bool` | `True` | `True`: block until done. `False`: return upload metadata immediately |
 | `interval` | `float` | `5.0` | Seconds between polls |
 | `timeout` | `float` | `600.0` | Max wait time in seconds |
+| `page_count` | `int` | `None` | PDF-1 only: the PDF's page count. Counted automatically if omitted and `pypdf` is installed |
 
-Returns the final processed media dict. Raises `TimeoutError` if `timeout` elapses.
+Returns the final media dict (`status`, `result`, `artifacts`). Raises `TimeoutError` if `timeout` elapses.
 
 ---
 
@@ -1000,7 +1093,7 @@ Returns the initial media metadata dict (includes `job.id`, `status`, `inputs`).
 
 #### `wait_for_media(jobid, interval=5.0, timeout=600.0) -> Dict`
 
-Poll `GET /api/v1/jobs/{jobid}` until terminal status (`COMPLETED`, `PROCESSED`, `FAILED`, `ERROR`).
+Poll `GET /api/v1/jobs/{jobid}` until a terminal status: `completed`, `failed` or `cancelled`.
 
 | Parameter | Type | Default | Description |
 | :-- | :-- | :-- | :-- |
@@ -1014,11 +1107,11 @@ Raises `TimeoutError` if `timeout` elapses.
 
 #### `get_result(media) -> Dict`
 
-Fetch the detection result JSON from a processed media dict's artifact.
+Download the result JSON from a processed media dict's `result` artifact. The job-level fields `tag`, `tagBoundaries` and `modelVersion` are merged in when the artifact lacks them; values already in the artifact are never changed.
 
 | Parameter | Type | Description |
 | :-- | :-- | :-- |
-| `media` | `dict` | A media dict returned by `process()`, `wait_for_media()`, or `get_media()` — must have `status=PROCESSED` and contain result artifacts |
+| `media` | `dict` | A media dict returned by `process()`, `wait_for_media()`, or `get_media()` — must have `status=completed` and contain a result artifact |
 
 Returns the detection result dict.
 
@@ -1068,7 +1161,13 @@ similarity down. Only faces with `status: "processed"` are searched.
 
 #### `list_media(**params) -> Dict`
 
-`GET /api/v1/jobs` — list all media records.
+`GET /api/v1/jobs` — list media records, newest first. Query params: `limit` (1–100, default 20), `offset`, `status`, `taskTypeSlug`, `createdAfter`, `createdBefore`. Returns `{"data", "total", "limit", "offset"}`.
+
+---
+
+#### `cancel_media(jobid) -> Dict`
+
+`POST /api/v1/jobs/{jobid}/cancel` — cancel a job in `initiated` or `queued` status; credits are refunded. Needs the **Delete** permission.
 
 ---
 
@@ -1139,6 +1238,12 @@ Async list of media records.
 
 ---
 
+#### `await cancel_media(jobid) -> Dict`
+
+Async cancel of a job that hasn't started processing.
+
+---
+
 #### `await delete_media(jobid) -> None`
 
 Async delete of a media record.
@@ -1148,3 +1253,20 @@ Async delete of a media record.
 #### `await finalize_media(jobid) -> bool`
 
 Async finalize of a media upload.
+
+---
+
+## 8. Changelog
+
+### 0.3.0
+
+Backwards compatible — existing code keeps working without changes.
+
+- **Result tags:** `get_result()` now includes `tag`, `tagBoundaries` and `modelVersion` (also on `media["result"]`). See [Reading Results](#31-reading-results).
+- **Errors:** API errors now map to `AuthenticationError`, `AuthorizationError`, `InsufficientCreditsError` and `QuotaExceededError` (previously all surfaced as `ValidationError`, which they still subclass). New `request_id` and `retry_after` attributes; `code` now holds the API error name.
+- **PDF-1** now sends `pageCount`, which the API requires (`page_count=` or automatic with `pypdf`).
+- `model_type` accepts slugs and numeric task type IDs as well as model codes.
+- New `cancel_media()` on both clients.
+- `wait_for_media()` returns on `cancelled` instead of waiting until timeout.
+- Uploaded file names keep their extension (`photo.jpg`, previously `photo`).
+- `httpx` is now installed with the SDK; visualization and PDF page counting are optional extras.

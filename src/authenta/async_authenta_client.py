@@ -35,6 +35,15 @@ from .authenta_exceptions import (
     InsufficientCreditsError,
     ValidationError,
     ServerError,
+    error_from_response,
+)
+from .task_types import (
+    count_pdf_pages,
+    find_result_url,
+    is_terminal,
+    merge_job_result,
+    model_code,
+    resolve_task_type_id,
 )
 
 
@@ -42,42 +51,13 @@ def _raise_for_authenta_error_async(resp: httpx.Response) -> None:
     """
     Async variant: map an Authenta API error response to a rich SDK exception.
     """
-    status = resp.status_code
     try:
-        data = resp.json()
+        body = resp.json()
     except ValueError:
-        if 400 <= status < 500:
-            raise ValidationError(
-                message=resp.text or "Client error",
-                status_code=status,
-            )
-        if status >= 500:
-            raise ServerError(
-                message=resp.text or "Server error",
-                status_code=status,
-            )
-        resp.raise_for_status()
-        return
-
-    code = data.get("code") or "unknown"
-    message = data.get("message") or resp.reason_phrase or "Unknown error"
-    details = data
-
-    if code == "IAM001":
-        raise AuthenticationError(message, status_code=status, details=details)
-    if code == "IAM002":
-        raise AuthorizationError(message, status_code=status, details=details)
-    if code == "AA001":
-        raise QuotaExceededError(message, status_code=status, details=details)
-    if code == "U007":
-        raise InsufficientCreditsError(message, status_code=status, details=details)
-
-    if 400 <= status < 500:
-        raise ValidationError(message, code=code, status_code=status, details=details)
-    if status >= 500:
-        raise ServerError(message, code=code, status_code=status, details=details)
-
-    raise AuthentaError(message, code=code, status_code=status, details=details)
+        body = None
+    raise error_from_response(
+        resp.status_code, body, text=resp.text, reason=resp.reason_phrase or "", headers=resp.headers
+    )
 
 
 def _safe_json_async(resp: httpx.Response) -> Dict[str, Any]:
@@ -146,24 +126,11 @@ class AsyncAuthentaClient:
         return filetype or "application/octet-stream"
 
     def get_task_id(self, model_type: str) -> str:
-        mapping = {
-            "AC-1": "1",
-            "AF-1": "2",
-            "VF-1": "3",
-            "DF-1": "4",
-            "FD-1": "5",
-            "DI-1": "6",
-            "FL-1": "7",
-            "FI-1": "8",
-            "FE-1": "9",
-            "AS-1": "10",
-            "ED-1": "11",
-            "PDF-1": "13",
-        }
-        task_id = mapping.get(model_type.upper())
-        if not task_id:
-            raise ValueError(f"Unknown model_type {model_type!r}. Valid options: {list(mapping.keys())}")
-        return task_id
+        """
+        Map a model code (``"AC-1"``), slug (``"ai-image-detection"``) or
+        numeric task type ID to the ``taskTypeId`` the API expects.
+        """
+        return resolve_task_type_id(model_type)
 
     async def create_media(
         self,
@@ -181,6 +148,8 @@ class AsyncAuthentaClient:
             "fileName": name,
             "sizeBytes": size,
         }
+        if kwargs.get("page_count") is not None:
+            inputs["pageCount"] = int(kwargs["page_count"])
         payload = {
             "taskTypeId": str(self.get_task_id(model_type)),
             "inputs": [inputs],
@@ -188,7 +157,7 @@ class AsyncAuthentaClient:
         parameters = {
             "version": "v1",
         }
-        if model_type.upper() == "FI-1":
+        if model_code(model_type) == "FI-1":
             fi_params = {
                 "isFaceswapCheck": kwargs.get("faceswapCheck"),
                 "isLivenessCheck": kwargs.get("livenessCheck"),
@@ -203,7 +172,7 @@ class AsyncAuthentaClient:
                     "slotName": "reference",
                     "contentType": self._content_type(reference_path),
                     "sizeBytes": os.path.getsize(reference_path),
-                    "fileName": os.path.basename(reference_path).split(".")[0],
+                    "fileName": os.path.basename(reference_path),
                 })
         payload["parameters"] = parameters
         client = await self._get_client()
@@ -221,9 +190,17 @@ class AsyncAuthentaClient:
         return _safe_json_async(resp)
 
     async def upload_file(self, path: str, model_type: str, **kwargs) -> Dict[str, Any]:
-        filename = os.path.basename(path).split(".")[0]
+        """
+        Create the job, PUT the file(s) to S3, then finalize.
+
+        ``page_count`` (PDFs only) is required by PDF-1; it is counted
+        automatically when omitted and ``pypdf`` is installed.
+        """
+        filename = os.path.basename(path)
         content_type = self._content_type(path)
         size = os.path.getsize(path)
+        if content_type == "application/pdf" and kwargs.get("page_count") is None:
+            kwargs["page_count"] = count_pdf_pages(path)
 
         meta = await self.create_media(
             name=filename,
@@ -247,7 +224,7 @@ class AsyncAuthentaClient:
             timeout=300,
         )
 
-        if model_type.upper() == "FI-1" and kwargs.get("reference_path") and len(meta["inputs"]) > 1:
+        if model_code(model_type) == "FI-1" and kwargs.get("reference_path") and len(meta["inputs"]) > 1:
             reference_img_url = meta["inputs"][1]["uploadUrl"]
             print(f"Uploading reference image {kwargs.get('reference_path')}...")
             if reference_img_url:
@@ -276,6 +253,21 @@ class AsyncAuthentaClient:
             _raise_for_authenta_error_async(resp)
         return resp.status_code == 200
 
+    async def cancel_media(self, jobid: str) -> Dict[str, Any]:
+        """
+        POST /api/v1/jobs/{jobid}/cancel: cancel a job that has not started
+        processing (status ``initiated`` or ``queued``). Its credits are refunded.
+
+        Returns:
+            The job with ``"status": "cancelled"``.
+        """
+        url = f"{self.base_url}/api/v1/jobs/{jobid}/cancel"
+        client = await self._get_client()
+        resp = await client.post(url, headers=self._headers())
+        if not resp.is_success:
+            _raise_for_authenta_error_async(resp)
+        return _safe_json_async(resp)
+
     async def wait_for_media(
         self,
         jobid: str,
@@ -285,14 +277,14 @@ class AsyncAuthentaClient:
         """
         Poll GET /api/v1/jobs/{jobid} until it reaches a terminal status.
 
-        Terminal statuses: COMPLETED, PROCESSED, FAILED, ERROR.
+        Terminal statuses: COMPLETED, FAILED, CANCELLED.
         Raises TimeoutError if 'timeout' seconds elapse without a terminal state.
         """
         start = time.time()
         while True:
             media = await self.get_media(jobid)
             status = (media["status"] or "").upper()
-            if status in {"COMPLETED", "PROCESSED", "FAILED", "ERROR"}:
+            if is_terminal(status):
                 return media
             if time.time() - start > timeout:
                 raise TimeoutError(
@@ -320,12 +312,15 @@ class AsyncAuthentaClient:
         auto_polling: bool = True,
         interval: float = 5.0,
         timeout: float = 600.0,
+        page_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         High-level helper:
           1) upload_file(path, model_type) -> get jobid
           2) finalize_media(jobid)
           3) wait_for_media(jobid) (if auto_polling=True)
+
+        ``page_count`` is for PDF-1 only; see :meth:`upload_file`.
         """
         if self._content_type(original_path).startswith("image/") and faceswapCheck:
             raise ValueError("faceswapCheck cannot be True for image media")
@@ -334,7 +329,7 @@ class AsyncAuthentaClient:
         if faceSimilarityCheck and not reference_path:
             raise ValueError("reference_path must be provided if faceSimilarityCheck is True")
 
-        if model_type.upper() == "FI-1":
+        if model_code(model_type) == "FI-1":
             fi_params = {
                 "reference_path": reference_path,
                 "faceswapCheck": faceswapCheck,
@@ -343,6 +338,8 @@ class AsyncAuthentaClient:
             }
         else:
             fi_params = {}
+        if page_count is not None:
+            fi_params["page_count"] = page_count
 
         meta = await self.upload_file(original_path, model_type=model_type, **fi_params)
 
@@ -357,27 +354,28 @@ class AsyncAuthentaClient:
 
     def get_result(self, media: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Fetch the detection result JSON from the media's artifact downloadUrl.
+        Fetch the detection result JSON from the media's ``result`` artifact.
+
+        The job-level fields the API adds on top — ``tag``, ``tagBoundaries``
+        and ``modelVersion`` — are merged in when the artifact lacks them;
+        values already in the artifact are never changed. The same fields are
+        also on ``media["result"]`` directly.
+
+        This is a plain (blocking) method for backwards compatibility — call it
+        without ``await``.
 
         Args:
             media: A media dict returned by process() or wait_for_media() —
-                   must contain an 'artifacts' key with a downloadUrl.
+                   must contain a ``result`` artifact.
 
         Returns:
             Parsed detection result dict.
         """
-        for artifact in media["artifacts"]:
-            if artifact["kind"] == "result":
-                result_url = artifact["downloadUrl"]
-                break
-        else:
-            raise ValueError("media dict has no 'resultURL'. Ensure processing is complete (status=PROCESSED).")
-        if not result_url:
-            raise ValueError("media dict has no 'resultURL'. Ensure processing is complete (status=PROCESSED).")
+        result_url = find_result_url(media)
         resp = httpx.get(result_url, timeout=30)
         if not resp.status_code == 200:
             raise RuntimeError(f"Failed to fetch resultURL: HTTP {resp.status_code}")
-        return _safe_json_async(resp)
+        return merge_job_result(media, _safe_json_async(resp))
 
     async def extract_face_vector(
         self,
@@ -425,3 +423,4 @@ class AsyncAuthentaClient:
         resp = await client.delete(url, headers=self._headers())
         if not resp.is_success:
             _raise_for_authenta_error_async(resp)
+
